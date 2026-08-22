@@ -175,7 +175,18 @@ def main() -> None:
             "Voz TTS", value=m.DEFAULT_TTS_VOICE,
             help="aura-2-alvaro-es = masculina, español latinoamericano",
         )
-        aspect = st.selectbox("Aspecto", ["16:9", "9:16", "1:1", "21:9", "4:3"], index=0)
+        aspect_label = st.radio(
+            "Proporciones",
+            ["Horizontal (16:9)", "Vertical (9:16)", "Cuadrado (1:1)"],
+            index=0,
+            horizontal=True,
+            help="Formato del vídeo final (horizontal, vertical o cuadrado)",
+        )
+        aspect = {
+            "Horizontal (16:9)": "16:9",
+            "Vertical (9:16)": "9:16",
+            "Cuadrado (1:1)": "1:1",
+        }[aspect_label]
         resolution = st.selectbox(
             "Resolución", ["auto", "480p", "720p", "1080p", "2K", "4K"], index=3)
         fps = st.selectbox("FPS", [24, 30, 60], index=0)
