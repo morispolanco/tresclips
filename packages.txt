@@ -1,3 +1,1 @@
-# Paquetes de sistema que instala Streamlit Cloud (apt-get) al desplegar.
-# ffmpeg es necesario para el montaje de los vídeos (incluye ffprobe).
 ffmpeg
