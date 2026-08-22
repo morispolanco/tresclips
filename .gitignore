@@ -1,0 +1,10 @@
+# Entorno
+.env
+__pycache__/
+*.pyc
+
+# Salidas de la aplicación y artefactos de prueba
+out/
+out_*/
+mock_clips/
+_tmp*/
