@@ -667,6 +667,92 @@ def list_video_models(base_url: str, api_key: str) -> None:
 
 
 # --------------------------------------------------------------------------
+# Presupuesto estimado (costo aproximado antes de generar)
+# --------------------------------------------------------------------------
+# OpenRouter factura el vídeo por "video_tokens". No publica tokens/segundo, pero
+# el precio anunciado de seedance-2.0-mini es $0.01345/s; con su precio por token
+# ($0.0000035) se calibra el factor: 0.01345 / 0.0000035 ≈ 3843 tokens/s.
+VIDEO_TOKENS_PER_SECOND = 3843.0
+
+
+def estimate_cost(base_url: str, api_key: str, video_model: str,
+                  seconds_per_clip: int, num_clips: int, tts_model: str,
+                  narrations: list[str | None], llm_model: str) -> dict:
+    """Presupuesto estimado en USD antes de generar (llamadas públicas, sin gastar).
+
+    Devuelve un dict con video_usd / tts_usd / llm_usd / total (o None si no hay
+    precio disponible). El total real puede variar: OpenRouter factura por tokens.
+    """
+    result: dict = {"video_usd": None, "video_note": None, "tts_usd": None,
+                    "llm_usd": None, "total": None}
+    headers = auth_headers(api_key) if api_key else {}
+    # --- vídeo: precio por token -> por segundo (factor calibrado) ---
+    meta = model_meta(base_url, api_key, video_model)
+    skus = meta.get("pricing_skus") or {}
+    try:
+        vt = float(skus.get("video_tokens") or 0)
+    except (TypeError, ValueError):
+        vt = 0.0
+    if vt > 0:
+        per_second = vt * VIDEO_TOKENS_PER_SECOND
+        seconds = seconds_per_clip * num_clips
+        result["video_usd"] = per_second * seconds
+        result["video_note"] = (f"≈ ${per_second:.4f}/s × {seconds} s "
+                                f"({num_clips} clips de {seconds_per_clip} s)")
+    # --- TTS: precio por carácter ---
+    tts_price = 0.0
+    try:
+        r = requests.get(f"{base_url}/models?output_modalities=speech",
+                         headers=headers, timeout=30)
+        for m in r.json().get("data", []):
+            if m.get("id") == tts_model:
+                tts_price = float((m.get("pricing") or {}).get("prompt") or 0) or 0.0
+                break
+    except Exception:  # noqa: BLE001
+        tts_price = 0.0
+    chars = sum(len(n) for n in narrations if n)
+    if tts_price > 0:
+        result["tts_usd"] = tts_price * chars
+    # --- LLM (storyboard): estimación de tokens ---
+    llm_in = llm_out = 0.0
+    try:
+        r = requests.get(f"{base_url}/models", headers=headers, timeout=30)
+        for m in r.json().get("data", []):
+            if m.get("id") == llm_model:
+                p = m.get("pricing") or {}
+                llm_in = float(p.get("prompt") or 0)
+                llm_out = float(p.get("completion") or 0)
+                break
+    except Exception:  # noqa: BLE001
+        llm_in = llm_out = 0.0
+    if llm_in or llm_out:
+        # ~600 tokens de prompt + ~500 de salida por la llamada del storyboard
+        result["llm_usd"] = 600 * llm_in + 500 * llm_out
+    vals = [v for v in (result["video_usd"], result["tts_usd"], result["llm_usd"])
+            if v is not None]
+    result["total"] = sum(vals) if vals else None
+    return result
+
+
+def print_cost_estimate(est: dict) -> None:
+    """Imprime el presupuesto estimado en la CLI."""
+    print("\n💰 Presupuesto estimado:")
+    if est.get("video_usd") is not None:
+        print(f"   🎬 Vídeo: {est['video_note']} → ≈ ${est['video_usd']:.3f}")
+    else:
+        print("   🎬 Vídeo: precio no disponible para este modelo")
+    if est.get("tts_usd") is not None:
+        print(f"   🎙 Narración TTS: ≈ ${est['tts_usd']:.4f}")
+    if est.get("llm_usd") is not None:
+        print(f"   🧠 Guion (LLM): ≈ ${est['llm_usd']:.4f}")
+    if est.get("total") is not None:
+        print(f"   TOTAL estimado: ≈ ${est['total']:.3f}")
+    else:
+        print("   TOTAL estimado: no disponible")
+    print("   (Estimación; OpenRouter factura por tokens y el total real puede variar.)")
+
+
+# --------------------------------------------------------------------------
 # Restricciones legales / política de contenido (no interrumpen el vídeo)
 # --------------------------------------------------------------------------
 RESTRICTION_KEYWORDS = (
@@ -1247,6 +1333,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "en lugar de crear un clip de reserva.")
     ap.add_argument("--no-storyboard", action="store_true",
                     help="No usar LLM para el guion: usa plantillas simples.")
+    ap.add_argument("--yes", action="store_true",
+                    help="Aprobar automáticamente el presupuesto estimado (sin preguntar).")
     ap.add_argument("--demo", action="store_true",
                     help="Modo demostración: crea clips sintéticos con FFmpeg (no requiere API).")
     ap.add_argument("--list-models", action="store_true",
@@ -1426,6 +1514,22 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
             extra = f"  🎙 {s.get('narration')}" if s.get("narration") else ""
             dur = f"  ⏱ {s.get('duration')} s" if s.get("duration") else ""
             print(f"     [{i}] {s['prompt'][:80]}{'…' if len(s['prompt']) > 80 else ''}{extra}{dur}")
+
+        # Presupuesto estimado + aprobación antes de gastar créditos
+        est = estimate_cost(base_url, api_key, args.model, args.duration, args.clips,
+                            args.tts_model, [s.get("narration") for s in scenes],
+                            args.llm_model)
+        print_cost_estimate(est)
+        if args.yes:
+            print("   (--yes: presupuesto aprobado automáticamente)")
+        elif sys.stdin.isatty():
+            try:
+                resp = input("¿Aprobar y generar? (s/N): ").strip().lower()
+            except EOFError:
+                resp = ""
+            if resp not in ("s", "si", "sí", "y", "yes"):
+                print("⛔ Generación cancelada por el usuario.")
+                return 0
 
         # Duración y parámetros: se ajustan a los metadatos reales del modelo.
         aspect, resolution = adjust_params(base_url, api_key, args.model,

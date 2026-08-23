@@ -95,6 +95,43 @@ def worker(argv: list[str], q: "queue.Queue[object]", api_key: str) -> None:
         q.put(("__EXIT__", code))
 
 
+def run_and_watch(argv: list[str], api_key: str, run_dir: str) -> tuple[int, list[str], list[tuple]]:
+    """Ejecuta el pipeline en segundo plano mostrando log y progreso en la UI."""
+    st.info(f"🚀 Generando… (esto puede tardar varios minutos). Archivos en: `{run_dir}`")
+    q: "queue.Queue[object]" = queue.Queue()
+    thread = threading.Thread(target=worker, args=(argv, q, api_key), daemon=True)
+    thread.start()
+    lines: list[str] = []
+    guion: list[tuple] = []
+    exit_code: int | None = None
+    with st.status("Ejecutando pipeline…", expanded=True) as status:
+        log_box = st.empty()
+        prog = st.progress(0.0, text="Arrancando…")
+        while True:
+            try:
+                item = q.get(timeout=0.3)
+            except queue.Empty:
+                continue
+            if isinstance(item, tuple) and item and item[0] == "__EXIT__":
+                exit_code = int(item[1])
+                break
+            line = str(item)
+            lines.append(line)
+            log_box.code("\n".join(lines[-80:]), language=None)
+            pm = PROGRESS_RE.match(line)
+            if pm:
+                done, total = int(pm.group(1)), int(pm.group(2))
+                prog.progress(min(0.98, done / max(1, total)), text=f"Escena {done}/{total}…")
+            gm = GUION_RE.match(line)
+            if gm:
+                guion.append((int(gm.group(1)), gm.group(2), gm.group(3),
+                              int(gm.group(4)), (gm.group(5) or "").strip() or None))
+            if "¡Listo!" in line:
+                prog.progress(1.0, text="¡Listo!")
+        status.update(label="Pipeline terminado", state="error" if exit_code != 0 else "complete")
+    return exit_code, lines, guion
+
+
 def session_run_dir() -> Path:
     """Directorio único por sesión (el contenedor de la nube es compartido)."""
     if "run_dir" not in st.session_state:
@@ -372,49 +409,62 @@ def main() -> None:
                 music_path.write_bytes(music_file.getbuffer())
                 cfg["music"] = str(music_path)
         argv = build_argv(cfg, demo)
-        st.info(f"🚀 Lanzando pipeline… (esto puede tardar varios minutos). "
-                f"Archivos en: `{run_dir}`")
-
-        q: "queue.Queue[object]" = queue.Queue()
-        thread = threading.Thread(target=worker, args=(argv, q, effective_key or ""), daemon=True)
-        thread.start()
-
-        lines: list[str] = []
-        guion: list[tuple] = []
-        exit_code: int | None = None
-        with st.status("Ejecutando pipeline…", expanded=True) as status:
-            log_box = st.empty()
-            prog = st.progress(0.0, text="Arrancando…")
-            total_clips = max(1, cfg["clips"])
-            while True:
+        run_job = {"argv": argv, "api_key": effective_key or "", "run_dir": str(run_dir)}
+        if demo:
+            # demo: sin gastos, se ejecuta directamente
+            st.session_state["run"] = run_job
+        else:
+            # presupuesto estimado + aprobación antes de gastar créditos
+            with st.spinner("💰 Calculando presupuesto…"):
                 try:
-                    item = q.get(timeout=0.3)
-                except queue.Empty:
-                    continue
-                if isinstance(item, tuple) and item and item[0] == "__EXIT__":
-                    exit_code = int(item[1])
-                    break
-                line = str(item)
-                lines.append(line)
-                log_box.code("\n".join(lines[-80:]), language=None)
-                pm = PROGRESS_RE.match(line)
-                if pm:
-                    done, total = int(pm.group(1)), int(pm.group(2))
-                    prog.progress(min(0.98, done / max(1, total)),
-                                  text=f"Escena {done}/{total}…")
-                gm = GUION_RE.match(line)
-                if gm:
-                    guion.append((int(gm.group(1)), gm.group(2), gm.group(3),
-                                  int(gm.group(4)), (gm.group(5) or "").strip() or None))
-                if "¡Listo!" in line:
-                    prog.progress(1.0, text="¡Listo!")
-            status.update(label="Pipeline terminado",
-                          state="error" if exit_code != 0 else "complete")
+                    est = m.estimate_cost(
+                        m.get_base_url(m.load_dotenv()), effective_key or None,
+                        cfg["model"], cfg["duration"], cfg["clips"], cfg["tts_model"],
+                        ["x" * 35] * cfg["clips"], cfg["llm_model"])
+                except Exception as e:  # noqa: BLE001
+                    est = {"video_usd": None, "tts_usd": None, "llm_usd": None,
+                           "total": None, "video_note": f"no disponible ({type(e).__name__})"}
+            st.session_state["pending"] = {**run_job, "estimate": est}
 
-        final_path = run_dir / "final_video.mp4"
+    if st.session_state.get("run"):
+        job = st.session_state.pop("run")
+        exit_code, lines, guion = run_and_watch(job["argv"], job["api_key"], job["run_dir"])
+        final_path = Path(job["run_dir"]) / "final_video.mp4"
         st.session_state["last_result"] = {
             "exit": exit_code, "lines": lines, "guion": guion, "video": str(final_path),
         }
+
+    if st.session_state.get("pending"):
+        pend = st.session_state["pending"]
+        est = pend.get("estimate") or {}
+        st.markdown("### 💰 Presupuesto estimado")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("🎬 Vídeo",
+                      f"≈ ${est['video_usd']:.3f}" if est.get("video_usd") is not None else "n/d",
+                      help=est.get("video_note") or "precio no disponible")
+        with c2:
+            st.metric("🎙 Narración TTS",
+                      f"≈ ${est['tts_usd']:.4f}" if est.get("tts_usd") is not None else "n/d",
+                      help="~35 caracteres por escena (estimación)")
+        with c3:
+            st.metric("🧠 Guion (LLM)",
+                      f"≈ ${est['llm_usd']:.4f}" if est.get("llm_usd") is not None else "n/d")
+        total = est.get("total")
+        if total is not None:
+            st.markdown(f"**Total estimado: ≈ ${total:.3f} USD**")
+        st.caption("Estimación orientativa: OpenRouter factura por tokens y el total real "
+                   "puede variar. No se gasta nada hasta que apruebes.")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Aprobar y generar", type="primary", use_container_width=True):
+                st.session_state["run"] = {k: pend[k] for k in ("argv", "api_key", "run_dir")}
+                del st.session_state["pending"]
+                st.rerun()
+        with col2:
+            if st.button("❌ Cancelar", use_container_width=True):
+                del st.session_state["pending"]
+                st.rerun()
 
     if st.session_state.get("last_result"):
         render_result(st.session_state["last_result"])

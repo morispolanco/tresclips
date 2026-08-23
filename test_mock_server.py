@@ -237,10 +237,13 @@ class Handler(BaseHTTPRequestHandler):
                 })
         elif self.path.startswith("/clips/"):
             self._serve_clip(self.path.rsplit("/", 1)[-1])
-        elif self.path == "/api/v1/models":
+        elif self.path.split("?")[0] == "/api/v1/models":
             self._send_json({"data": [
                 {"id": "google/gemini-2.5-flash", "name": "Google Gemini 2.5 Flash"},
                 {"id": "openai/gpt-4o-mini", "name": "OpenAI GPT-4o mini"},
+                {"id": "deepseek/deepseek-v4-flash-0731",
+                 "pricing": {"prompt": "0.00000008", "completion": "0.00000018"}},
+                {"id": "deepgram/aura-2", "pricing": {"prompt": "0.00003", "completion": "0"}},
             ]})
         else:
             self._send_json({"error": {"code": 404, "message": f"Ruta no simulada: {self.path}"}}, 404)
@@ -273,6 +276,7 @@ def run_pipeline() -> int:
            "--clips", "6",
            "--duration", "5",
            "--resolution", "1080p",   # no soportado por seedance-mini -> aviso y 'auto'
+           "--yes",                   # aprobar el presupuesto automáticamente (no interactivo)
            "--poll-interval", "1",
            "--timeout", "120",
            "--out-dir", str(ROOT / "out_mock")]
@@ -316,6 +320,7 @@ def run_pipeline() -> int:
             "--logo", str(CLIPS_DIR / "logo.png"),
             "--music", str(CLIPS_DIR / "music.mp3"),
             "--music-volume", "0.25",
+            "--yes",
             "--poll-interval", "1", "--timeout", "120",
             "--out-dir", str(ROOT / "out_mock_script")]
     r2 = subprocess.run(cmd2, env=env, capture_output=True, text=True,

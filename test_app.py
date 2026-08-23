@@ -10,8 +10,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 # AppTest crea carpetas temporales: usar el workspace (el temp del sistema puede estar bloqueado)
-tempfile.tempdir = str(ROOT / "_tmp_streamlit")
-os.makedirs(tempfile.tempdir, exist_ok=True)
+tmp_root = ROOT / "_tmp_streamlit"
+tmp_root.mkdir(parents=True, exist_ok=True)
+tempfile.tempdir = str(tmp_root)
 import app as app_mod  # noqa: E402
 import main as m  # noqa: E402
 
@@ -50,7 +51,28 @@ def test_app_renders():
         print(f"test_app_renders SKIP (el sandbox bloquea chmod en temporales de AppTest): {e}")
 
 
+def test_approval_flow():
+    try:
+        from streamlit.testing.v1 import AppTest
+        at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+        at.run()
+        idea_box = at.text_area[0]
+        gen = next(b for b in at.button if b.label == "🎬 Generar vídeo")
+        idea_box.set_value("Un gato astronauta explora una estación").run()
+        gen.click().run()
+        assert not at.exception, at.exception
+        texts = " ".join(str(md.value) for md in at.markdown if md.value)
+        assert "Presupuesto estimado" in texts, [md.value for md in at.markdown if md.value]
+        labels = [b.label for b in at.button]
+        assert any("Aprobar y generar" in l for l in labels), labels
+        assert any("Cancelar" in l for l in labels), labels
+        print("test_approval_flow OK (presupuesto mostrado + botones aprobar/cancelar)")
+    except PermissionError as e:
+        print(f"test_approval_flow SKIP (sandbox chmod): {e}")
+
+
 if __name__ == "__main__":
     test_engine_in_process()
     test_app_renders()
+    test_approval_flow()
     print("TODO OK")

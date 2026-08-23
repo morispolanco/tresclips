@@ -173,7 +173,27 @@ p. ej.:
 | `--lengthen` | Alarga en cámara lenta los clips que no lleguen a `--duration` | off |
 | `--no-storyboard` | No usa LLM para el guion (plantillas simples) | off |
 | `--demo` | Prueba el pipeline FFmpeg con clips sintéticos (sin API) | off |
+| `--yes` | Aprobar automáticamente el presupuesto estimado (sin preguntar) | off |
 | `--list-models` | Lista los modelos de vídeo y sus capacidades | — |
+
+### Presupuesto y aprobación
+
+Antes de gastar créditos, la app muestra un **costo estimado**:
+
+- **Vídeo**: precio por segundo del modelo (los precios de OpenRouter son por token;
+  se convierten con un factor calibrado con el precio anunciado de Seedance 2.0 Mini,
+  $0.01345/s).
+- **Narración TTS**: precio por carácter (`deepgram/aura-2` ≈ $0.00003/car).
+- **Guion LLM**: estimación de tokens del storyboard.
+- **Total estimado** = suma de los tres.
+
+En la **interfaz web**, al pulsar "🎬 Generar vídeo" se muestra el presupuesto y los
+botones **✅ Aprobar y generar** / **❌ Cancelar**; no se gasta nada hasta aprobar.
+En la **CLI**, se imprime el presupuesto y se pregunta *"¿Aprobar y generar? (s/N)"*;
+usa `--yes` para aprobar automáticamente en scripts.
+
+> El total real puede variar: OpenRouter factura por tokens y el precio anunciado
+> del modelo puede cambiar.
 
 ### Modelos de vídeo (OpenRouter)
 
