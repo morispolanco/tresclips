@@ -1071,16 +1071,16 @@ def make_demo_srt(dest: Path, text: str, duration: int) -> Path:
 def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
                    fps: int, has_audio: bool, narration: Path | None = None,
                    duration: int | None = None, subtitles: Path | None = None,
-                   logo: Path | None = None, music: Path | None = None,
-                   music_volume: float = 0.2, end_url: str | None = None) -> None:
+                   logo: Path | None = None, end_url: str | None = None) -> None:
     """Re-codifica un clip a códec/resolución/fps/audio comunes para concatenarlo.
 
     - `narration`: sustituye al audio del clip (relleno de silencio hasta duration).
     - `subtitles`: texto quemado (karaoke).
     - `logo`: imagen pequeña en la esquina superior izquierda.
-    - `music`: música de fondo mezclada a `music_volume` (0-1) bajo la narración.
     - `end_url`: texto (URL) quemado en la parte superior durante los últimos
-      ~2 segundos del clip (para mostrarlo al final del vídeo).
+      ~3 segundos del clip (para mostrarlo al final del vídeo).
+    La música de fondo NO se mezcla aquí: se mezcla al final sobre el vídeo
+    completo (mix_background_music) para que sea continua sin cortes.
     """
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
@@ -1098,9 +1098,10 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
                 shutil.copyfile(font_src, font_local)
                 url_file = dst.parent / "_url.txt"
                 url_file.write_text(str(end_url), encoding="utf-8")
-                t0 = max(0.0, float(duration) - 2.2)
+                t0 = max(0.0, float(duration) - 3.0)
                 vf += (f",drawtext=textfile={url_file.name}:fontfile={font_local.name}:"
-                       f"fontsize=16:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1:"
+                       f"fontsize=18:fontcolor=white:borderw=1:bordercolor=black:"
+                       f"box=1:boxcolor=black@0.45:boxborderw=8:"
                        f"x=(w-text_w)/2:y=28:enable='between(t,{t0:.2f},{duration:.2f})'")
             except OSError:
                 pass
@@ -1128,50 +1129,19 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
         cmd += ["-i", str(logo)]
         logo_idx = next_idx
         next_idx += 1
-    music_idx: int | None = None
-    if music:
-        cmd += ["-i", str(music)]
-        music_idx = next_idx
-        next_idx += 1
 
-    need_fc = logo is not None or music is not None
-    if need_fc:
-        parts: list[str] = [f"[0:v]{vf}[base]"]
-        if logo:
-            logo_h = max(24, round(height * 0.08))  # logo pequeño: ~8% de la altura
-            parts.append(f"[{logo_idx}:v]scale=-2:{logo_h}[lg]")
-            parts.append("[base][lg]overlay=10:10[vout]")
-            vmap = "[vout]"
+    if logo:
+        logo_h = max(24, round(height * 0.08))  # logo pequeño: ~8% de la altura
+        fc = (f"[0:v]{vf}[base];"
+              f"[{logo_idx}:v]scale=-2:{logo_h}[lg];"
+              f"[base][lg]overlay=10:10[vout]")
+        cmd += ["-filter_complex", fc, "-map", "[vout]"]
+        if narration:
+            cmd += ["-map", f"{narration_idx}:a:0", "-af", "apad", "-t", str(duration)]
+        elif has_audio:
+            cmd += ["-map", "0:a:0"]
         else:
-            vmap = "[base]"
-        amap: str | None = None
-        if music:
-            vol = max(0.0, min(1.0, float(music_volume)))
-            if narration_idx is not None:
-                # forzar el mismo formato (48 kHz estéreo) y NO normalizar (normalize=0):
-                # con normalize=1, amix divide la mezcla y la música queda casi inaudible
-                parts.append(f"[{narration_idx}:a]aformat=sample_rates=48000:"
-                             f"channel_layouts=stereo,volume=1.0[narr]")
-                parts.append(f"[{music_idx}:a]aformat=sample_rates=48000:"
-                             f"channel_layouts=stereo,volume={vol:.3f}[mus]")
-                parts.append("[narr][mus]amix=inputs=2:duration=first:normalize=0:"
-                             "dropout_transition=0,apad[aout]")
-            else:
-                parts.append(f"[{music_idx}:a]aformat=sample_rates=48000:"
-                             f"channel_layouts=stereo,volume={vol:.3f},apad[aout]")
-            amap = "[aout]"
-        cmd += ["-filter_complex", ";".join(parts), "-map", vmap]
-        if amap:
-            # el apad ya está dentro del filtro complejo; -t recorta a la duración
-            cmd += ["-map", amap, "-t", str(duration)]
-        else:
-            # sin música: audio simple (narración/silencio/audio del clip)
-            if narration:
-                cmd += ["-map", f"{narration_idx}:a:0", "-af", "apad", "-t", str(duration)]
-            elif has_audio:
-                cmd += ["-map", "0:a:0"]
-            else:
-                cmd += ["-map", "1:a:0", "-shortest"]
+            cmd += ["-map", "1:a:0", "-shortest"]
     else:
         cmd += ["-map", "0:v:0", "-vf", vf]
         if narration:
@@ -1189,6 +1159,28 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
     r = run_cmd(cmd, cwd=dst.parent)
     if r.returncode != 0:
         raise RuntimeError(f"FFmpeg no pudo normalizar {src.name}: {r.stderr[-500:]}")
+
+
+def mix_background_music(ffmpeg: str, video: Path, music: Path, volume: float,
+                         out: Path) -> None:
+    """Mezcla la música de fondo sobre el vídeo COMPLETO (una sola pista continua,
+    sin cortes entre clips). La música se recorta/rellena a la duración total y se
+    mezcla con `amix normalize=0` bajo la narración."""
+    vol = max(0.0, min(1.0, float(volume)))
+    cmd = [
+        ffmpeg, "-y", "-i", str(video), "-i", str(music),
+        "-filter_complex",
+        "[0:a]aformat=sample_rates=48000:channel_layouts=stereo[na];"
+        f"[1:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={vol:.3f},apad[m];"
+        "[na][m]amix=inputs=2:duration=first:normalize=0:dropout_transition=0[a]",
+        "-map", "0:v:0", "-map", "[a]",
+        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        str(out),
+    ]
+    r = run_cmd(cmd)
+    if r.returncode != 0:
+        raise RuntimeError(f"FFmpeg no pudo mezclar la música de fondo: {r.stderr[-500:]}")
 
 
 def concat_clips(ffmpeg: str, clips: list[Path], out_path: Path, cwd: Path) -> None:
@@ -1704,14 +1696,21 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         n = norm_dir / f"clip_{i:02d}_norm.mp4"
         info = probe_video(ffprobe, p)
         normalize_clip(ffmpeg, p, n, width, height, args.fps, info.get("has_audio", False),
-                       narration=narr, duration=cdur if narr else None, subtitles=srt,
+                       narration=narr, duration=cdur, subtitles=srt,
                        logo=logo_path if i == 1 else None,
-                       music=music_path, music_volume=args.music_volume,
                        end_url=args.end_url if i == total_clips else None)
         norm_clips.append(n)
 
     print(f"🧩 Concatenando los {len(norm_clips)} clips en un único MP4…")
     concat_clips(ffmpeg, norm_clips, final_path, out_dir)
+
+    # Música de fondo: se mezcla al FINAL sobre el vídeo completo (continua, sin
+    # cortes entre clips) en lugar de reiniciarse en cada clip.
+    if music_path:
+        print(f"🎵 Mezclando música de fondo continua (volumen {args.music_volume})…")
+        mixed = final_path.with_name("final_with_music.mp4")
+        mix_background_music(ffmpeg, final_path, music_path, args.music_volume, mixed)
+        mixed.replace(final_path)
 
     final_info = probe_video(ffprobe, final_path)
     print("\n✅ ¡Listo!")

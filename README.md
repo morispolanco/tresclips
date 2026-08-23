@@ -244,13 +244,13 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
   con sincronización palabra por palabra a partir de la duración real del audio.
   Además se genera **`subtitles.srt`** (una pista por escena, con timecodes
   acumulados) descargable desde la interfaz.
-- **Música de fondo**: con `--music RUTA` (o subiendo el archivo en la interfaz),
-  la música se mezcla bajo la narración en todos los clips (`amix` de FFmpeg con
-  `normalize=0` para no atenuarla, y mismo formato 48 kHz estéreo; volumen por
-  defecto 0.3, ajustable con `--music-volume`).
+- **Música de fondo**: con `--music RUTA` (o subiendo el archivo en la interfaz), la
+  música se mezcla **sobre el vídeo completo** al final del montaje (`amix` con
+  `normalize=0` y 48 kHz estéreo), de modo que suena **continua de principio a fin,
+  sin cortes ni huecos entre clips**. Volumen por defecto 0.3 (`--music-volume`).
 - **URL final**: con `--end-url TEXTO`, ese texto (p. ej. tu web) se muestra
-  **siempre** quemado en la parte superior del vídeo durante los últimos ~2 s,
-  aunque estén desactivados los subtítulos.
+  **siempre** quemado en la parte superior (con fondo para contraste) durante los
+  últimos ~3 s del vídeo, aunque estén desactivados los subtítulos.
 
 ## Pruebas sin gastar créditos
 
