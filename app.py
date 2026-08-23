@@ -54,6 +54,28 @@ class QueueStream(io.TextIOBase):
         pass
 
 
+def get_configured_key(typed: str) -> str | None:
+    """Clave efectiva: la escrita en la UI (por sesión) o la de los secretos de
+    Streamlit (st.secrets['OPENROUTER_API_KEY']). Si no hay ninguna, None (en
+    local main.py usará .env)."""
+    if typed:
+        return typed
+    try:
+        secret = st.secrets.get("OPENROUTER_API_KEY")
+        if secret:
+            return str(secret)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def has_secret_key() -> bool:
+    try:
+        return bool(st.secrets.get("OPENROUTER_API_KEY"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def worker(argv: list[str], q: "queue.Queue[object]", api_key: str) -> None:
     """Ejecuta main.main() en segundo plano capturando su salida.
 
@@ -180,11 +202,18 @@ def main() -> None:
         st.header("⚙️ Configuración")
         api_key = st.text_input(
             "Clave de OpenRouter", type="password",
-            help="Cada usuario pone la suya. Se usa solo en tu sesión y no se "
-                 "guarda. Consíguela en https://openrouter.ai/settings/keys "
-                 "(requiere saldo). Si la dejas vacía y hay un archivo .env, se usa ese.",
+            help="Opcional si hay clave en los secretos de Streamlit. Si la pones, "
+                 "se usa solo en tu sesión y no se guarda. Consíguela en "
+                 "https://openrouter.ai/settings/keys (requiere saldo).",
         )
-        st.caption("🔒 Tu clave se usa solo en esta sesión y nunca se guarda ni se comparte.")
+        effective_key = get_configured_key(api_key)
+        if has_secret_key():
+            st.caption(
+                "🔑 Hay una clave en los **secretos de Streamlit**; no hace falta "
+                "escribirla (si escribes una, se usa la tuya solo en esta sesión)."
+            )
+        else:
+            st.caption("🔒 Tu clave se usa solo en esta sesión y nunca se guarda ni se comparte.")
         st.divider()
         clips = st.slider("Nº de clips", 1, 12, m.DEFAULT_CLIPS)
         duration = st.number_input(
@@ -233,7 +262,7 @@ def main() -> None:
         if st.button("📋 Ver modelos de vídeo", use_container_width=True):
             try:
                 models = m.fetch_video_models(
-                    m.get_base_url(m.load_dotenv()), api_key or None)
+                    m.get_base_url(m.load_dotenv()), effective_key or None)
                 if models:
                     st.write("**Modelos de vídeo disponibles:**")
                     for mod in sorted(models, key=lambda x: str(x.get("id", ""))):
@@ -330,7 +359,7 @@ def main() -> None:
                 f"Archivos en: `{run_dir}`")
 
         q: "queue.Queue[object]" = queue.Queue()
-        thread = threading.Thread(target=worker, args=(argv, q, api_key), daemon=True)
+        thread = threading.Thread(target=worker, args=(argv, q, effective_key or ""), daemon=True)
         thread.start()
 
         lines: list[str] = []
