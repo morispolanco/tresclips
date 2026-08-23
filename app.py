@@ -190,6 +190,10 @@ def main() -> None:
             "Voz TTS", value=m.DEFAULT_TTS_VOICE,
             help="aura-2-alvaro-es = masculina, español latinoamericano",
         )
+        llm_model = st.text_input(
+            "Modelo del guion (LLM)", value="deepseek/deepseek-v4-flash-0731",
+            help="LLM de OpenRouter que escribe el storyboard/guion",
+        )
         aspect_label = st.radio(
             "Proporciones",
             ["Horizontal (16:9)", "Vertical (9:16)", "Cuadrado (1:1)"],
@@ -289,6 +293,7 @@ def main() -> None:
         cfg = {
             "clips": int(clips), "duration": int(duration),
             "model": model.strip(), "tts_model": tts_model.strip(), "voice": voice.strip(),
+            "llm_model": llm_model.strip(),
             "aspect": aspect, "resolution": resolution, "fps": int(fps),
             "no_narration": bool(no_narr), "no_subtitles": bool(no_sub),
             "fixed_duration": bool(fixed), "audio": bool(audio), "lengthen": bool(lengthen),
