@@ -891,6 +891,13 @@ def lengthen_clip(ffmpeg: str, src: Path, dst: Path, target: float, probe: dict)
 # --------------------------------------------------------------------------
 # Subtítulos (quemados en el vídeo + archivo .srt)
 # --------------------------------------------------------------------------
+# Estilo de los subtítulos quemados: HARDCODEADO (tamaño pequeño fijo, colores fijos)
+SUBTITLE_FONT_SIZE = 14        # letra mucho más pequeña que el estilo por defecto
+SUBTITLE_MARGIN_V = 26         # margen vertical inferior (px)
+SUBTITLE_HIGHLIGHT = "#FFE14D"  # color de la palabra que se está leyendo (karaoke)
+SUBTITLE_DIM = "#E8E8E8"       # color del resto de la frase
+
+
 def format_srt_ts(seconds: float) -> str:
     """Formatea segundos como HH:MM:SS,mmm para SRT."""
     ms = int(round(seconds * 1000))
@@ -918,17 +925,44 @@ def wrap_text(text: str, width: int = 42) -> str:
     return "\n".join(lines)
 
 
-def build_scene_srt(text: str, duration: float, path: Path,
-                    start: float = 0.3, end_pad: float = 0.25) -> None:
-    """Escribe el .srt de una escena (subtítulo con el texto de la narración)."""
+def _split_words(text: str) -> list[tuple[str, int, int]]:
+    """Palabras con su posición en el texto (para resaltar la palabra actual)."""
+    return [(m.group(0), m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+
+
+def build_scene_srt(text: str, audio_duration: float | None, clip_duration: float,
+                    path: Path) -> None:
+    """Escribe el .srt de una escena en ESTILO KARAOKE: una pista por palabra,
+    resaltando (amarillo + negrita) la palabra que se está leyendo.
+
+    El tiempo de cada palabra es proporcional a su longitud y reparte
+    `audio_duration` (la duración real de la narración medida con ffprobe, o una
+    estimación si no se pudo medir) a lo largo del clip.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    end = max(start + 0.3, duration - end_pad)
-    content = (
-        "1\n"
-        f"{format_srt_ts(start)} --> {format_srt_ts(end)}\n"
-        f"{wrap_text(text)}\n"
-    )
-    path.write_text(content, encoding="utf-8")
+    words = _split_words(text)
+    if not words:
+        words = [(str(text), 0, len(str(text)))]
+    audio = audio_duration if audio_duration and audio_duration > 0 else clip_duration * 0.85
+    total_chars = sum(len(w) for w, _, _ in words) or 1
+    start = 0.15
+    end = max(start + 0.3, audio + 0.1)
+    available = max(0.3, end - start)
+    cues: list[tuple[float, float, str]] = []
+    t = start
+    for w, s, e in words:
+        t_end = t + available * (len(w) / total_chars)
+        highlighted = (text[:s]
+                       + f'<font color="{SUBTITLE_HIGHLIGHT}"><b>{w}</b></font>'
+                       + text[e:])
+        cues.append((t, t_end, highlighted))
+        t = t_end
+    blocks = []
+    for idx, (t0, t1, line) in enumerate(cues, start=1):
+        blocks.append(
+            f"{idx}\n{format_srt_ts(t0)} --> {format_srt_ts(t1)}\n{line}"
+        )
+    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
 
 
 def build_combined_srt(entries: list[tuple[str, float, float]], path: Path) -> None:
@@ -944,7 +978,7 @@ def build_combined_srt(entries: list[tuple[str, float, float]], path: Path) -> N
 
 def make_demo_srt(dest: Path, text: str, duration: int) -> Path:
     """Genera el .srt de demostración (mismo formato que el real)."""
-    build_scene_srt(text, float(duration), dest)
+    build_scene_srt(text, float(duration), float(duration), dest)
     return dest
 
 
@@ -971,7 +1005,8 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
         srt_local = dst.parent / f"{dst.stem}.srt"
         shutil.copyfile(subtitles, srt_local)
         vf += (f",subtitles=filename={srt_local.name}"
-               f":force_style='FontSize=24,Outline=1,MarginV=30'")
+               f":force_style='FontName=Arial,FontSize={SUBTITLE_FONT_SIZE},"
+               f"Outline=1,MarginV={SUBTITLE_MARGIN_V}'")
     cmd = [ffmpeg, "-y", "-i", str(src)]
     if narration:
         cmd += ["-i", str(narration)]
@@ -1385,11 +1420,11 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
             print(f"     ⏱ Duración del clip: {cdur} s"
                   + (f"  (narración {narration_dur:.1f} s)" if narration_dur else ""))
 
-            # subtítulos de la escena (texto de la narración)
+            # subtítulos de la escena (texto de la narración, estilo karaoke)
             srt_file: Path | None = None
             if subtitles_on and scene.get("narration"):
                 srt_file = out_dir / "subtitles" / f"clip_{i:02d}.srt"
-                build_scene_srt(scene["narration"], float(cdur), srt_file)
+                build_scene_srt(scene["narration"], narration_dur, float(cdur), srt_file)
 
             # 3) generar el vídeo con esa duración
             prompt = scene["prompt"]

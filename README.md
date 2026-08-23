@@ -215,9 +215,11 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
   latinoamericano). FFmpeg mezcla cada narración con su clip (la narración
   sustituye al audio del clip y se ajusta a la duración exacta del clip).
 - **Subtítulos**: con narración activa (y salvo `--no-subtitles`), el texto de
-  cada narración se **quema en el vídeo** (filtro `subtitles` de FFmpeg, con
-  libass) y además se genera **`subtitles.srt`** con los timecodes acumulados del
-  vídeo completo (descargable desde la interfaz).
+  cada narración se **quema en el vídeo** con **estilo karaoke**: letra pequeña
+  (fija en el código) que **resalta en amarillo la palabra que se está leyendo**,
+  con sincronización palabra por palabra a partir de la duración real del audio.
+  Además se genera **`subtitles.srt`** (una pista por escena, con timecodes
+  acumulados) descargable desde la interfaz.
 
 ## Pruebas sin gastar créditos
 

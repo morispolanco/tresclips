@@ -153,10 +153,17 @@ def test_srt_helpers():
     tmp = Path(__file__).parent / "_tmp_srt"
     try:
         p = tmp / "clip_01.srt"
-        m.build_scene_srt("Así comienza la aventura espacial.", 5.0, p)
+        m.build_scene_srt("Así comienza la aventura espacial.", 5.0, 5.0, p)
         content = p.read_text(encoding="utf-8")
-        assert "00:00:00,300 --> 00:00:04,750" in content, content
-        assert "Así comienza la aventura espacial." in content
+        assert "00:00:00,150" in content
+        # karaoke: una pista por palabra, con la palabra resaltada en su pista
+        cues = [ln for ln in content.splitlines() if "-->" in ln]
+        assert len(cues) == 5, cues  # 5 palabras
+        assert content.count("<b>") == 5
+        assert f'<font color="{m.SUBTITLE_HIGHLIGHT}"><b>comienza</b></font>' in content
+        # el tiempo total de las pistas cubre la duración del audio
+        last_end = cues[-1].split("-->")[1].strip().split()[0]
+        assert last_end >= m.format_srt_ts(4.9)
         comb = tmp / "subtitles.srt"
         m.build_combined_srt([("Escena uno", 0.0, 5.0), ("Escena dos", 5.0, 9.0)], comb)
         c2 = comb.read_text(encoding="utf-8")
