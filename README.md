@@ -2,7 +2,7 @@
 
 Aplicación que, **partiendo de una sola idea** del usuario:
 
-1. **Storyboard con guion temporal**: un LLM de OpenRouter (p. ej. `google/gemini-2.5-flash`) convierte la idea en **6 escenas consecutivas**, cada una con prompt de vídeo, narración en español (latinoamericano) y una **duración sugerida**.
+1. **Storyboard con guion temporal**: un LLM de OpenRouter (por defecto `deepseek/deepseek-v4-flash-0731`) convierte la idea en **6 escenas consecutivas**, cada una con prompt de vídeo, narración en español (latinoamericano) y una **duración sugerida**.
 2. **Generación con duración variable**: la API de vídeo de **OpenRouter** (por defecto `bytedance/seedance-2.0-mini`) genera cada clip con la duración que necesita su escena. Con narración activa, la duración se **ajusta a la duración real de la narración** (medida con FFmpeg), redondeada a los valores que soporta el modelo.
 3. **Narración**: la API de **texto-a-voz (TTS)** de OpenRouter (por defecto `deepgram/aura-2`, voz **`aura-2-alvaro-es`**, masculina, español latinoamericano) genera la voz en off de cada escena.
 4. **Montaje**: **FFmpeg** mezcla cada clip con su narración, normaliza todo (mismo códec H.264, resolución y fps) y **concatena el MP4 final**.
@@ -45,6 +45,10 @@ OPENROUTER_API_KEY=tu_clave_aqui
 # 6 clips de duración variable ajustada a su narración (masculina, es-LatAm) → out/final_video.mp4
 python main.py "Un robot explorador descubre una ciudad submarina olvidada"
 
+# Con tu propio guion: JSON de escenas (prompt/narration/duration) o guion en texto libre
+python main.py --script mi_guion.json
+python main.py --script "Escena 1: un robot despierta... Escena 2: explora..."
+
 # Sin narración (clips fijos de --duration segundos, en silencio o con su audio)
 python main.py "Un robot explorador descubre una ciudad submarina olvidada" --no-narration
 
@@ -54,7 +58,7 @@ python main.py "Mi idea" --fixed-duration --duration 5
 # Más clips / otro ritmo
 python main.py "Mi idea" --clips 8
 
-# Sin argumentos: te la pide de forma interactiva
+# Sin argumentos: te pide la idea (o 'guion: …')
 python main.py
 ```
 
@@ -68,11 +72,14 @@ streamlit run app.py
 
 Se abre en el navegador (normalmente `http://localhost:8501`) y permite:
 
-- Escribir la **idea** y lanzar **"🎬 Generar vídeo"** o **"🧪 Modo demo (sin API)"**.
+- Escribir la **idea** o pegar tu **guion** (selector "¿Qué quieres pegar?"), subir un
+  **logo** opcional (esquina superior izquierda del primer clip) y lanzar
+  **"🎬 Generar vídeo"** o **"🧪 Modo demo (sin API)"**.
 - Configurar desde la barra lateral: nº de clips, duración base, modelo de vídeo,
   modelo TTS y **voz** (por defecto `aura-2-alvaro-es`, masculina, español
-  latinoamericano), aspecto, resolución, FPS y opciones (sin narración, duración
-  fija, audio del modelo, alargar, sin storyboard…).
+  latinoamericano), **proporciones (horizontal / vertical / cuadrado)**, resolución,
+  FPS y opciones (sin narración, duración fija, audio del modelo, alargar, sin
+  storyboard…).
 - Escribir la **clave de OpenRouter** directamente en la interfaz (si se deja
   vacía, se usa la del archivo `.env`).
 - **"📋 Ver modelos de vídeo"** para listar el catálogo disponible.
@@ -89,6 +96,18 @@ La app está preparada para **Streamlit Community Cloud sin secretos**: **cada
 usuario pone su propia clave de OpenRouter** en la barra lateral (se usa solo en
 su sesión, no se guarda ni se comparte). No hay que configurar ninguna clave en
 Streamlit.
+
+**Alternativa (recomendada para un despliegue privado):** configura la clave en
+los **secretos de Streamlit**:
+
+- En la nube: **Streamlit Cloud → Settings → Secrets** →
+  `OPENROUTER_API_KEY = "sk-or-..."`.
+- En local: copia `.streamlit/secrets.example.toml` a `.streamlit/secrets.toml`
+  y pega tu clave (ese archivo está en `.gitignore`, no se sube).
+
+Con secretos configurados, los usuarios **no necesitan escribir la clave** (la
+app la toma de `st.secrets`); si un usuario escribe la suya en la barra lateral,
+esa prevalece solo para su sesión.
 
 Pasos:
 
@@ -127,6 +146,7 @@ p. ej.:
 
 | Opción | Descripción | Por defecto |
 |---|---|---|
+| `--script` | **Guion propio**: ruta de archivo o texto. JSON con `{"scenes": […]}` (se usa tal cual) o guion libre (se convierte con el LLM) | — |
 | `--clips N` | Número de clips/escenas | `6` |
 | `--duration N` | Duración base. Con narración activa, cada clip se ajusta a la duración real de su narración (variable) | `5` |
 | `--fixed-duration` | Con narración activa, usar siempre `--duration` en vez de ajustar cada clip | off |
@@ -135,8 +155,10 @@ p. ej.:
 | `--tts-model MODELO` | Modelo de texto-a-voz (TTS) | `deepgram/aura-2` |
 | `--voice VOZ` | Voz TTS (masculina, español latinoamericano) | `aura-2-alvaro-es` |
 | `--no-narration` | No generar narración TTS | off |
+| `--no-subtitles` | No quemar subtítulos (por defecto se queman los de la narración y se genera `subtitles.srt`) | off |
+| `--logo RUTA` | Imagen de logo (png/jpg…) que se superpone pequeña en la esquina superior izquierda del **primer clip** | — |
 | `--base-url URL` | URL base de la API de OpenRouter | `https://openrouter.ai/api/v1` |
-| `--aspect-ratio` | `16:9`, `9:16`, `1:1`, `4:3`, `3:2`, `21:9`… (se valida contra el modelo) | `16:9` |
+| `--aspect-ratio` | Proporciones: **horizontal**, **vertical**, **cuadrado** (o 16:9, 9:16, 1:1…). En la CLI se **pregunta** si no se indica | pregunta en CLI / selector en Streamlit |
 | `--resolution` | `480p`, `720p`, `1080p`, `2K`, `4K` o `auto` | `1080p` |
 | `--audio` | Pide audio generado junto al vídeo; con narración activa, la narración lo sustituye | off |
 | `--retries N` | Intentos por clip/narración ante rechazos por política/restricciones | `3` |
@@ -190,6 +212,10 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
   `deepgram/aura-2` con la voz **`aura-2-alvaro-es`** (masculina, español
   latinoamericano). FFmpeg mezcla cada narración con su clip (la narración
   sustituye al audio del clip y se ajusta a la duración exacta del clip).
+- **Subtítulos**: con narración activa (y salvo `--no-subtitles`), el texto de
+  cada narración se **quema en el vídeo** (filtro `subtitles` de FFmpeg, con
+  libass) y además se genera **`subtitles.srt`** con los timecodes acumulados del
+  vídeo completo (descargable desde la interfaz).
 
 ## Pruebas sin gastar créditos
 
@@ -212,8 +238,10 @@ restricciones de política (de vídeo y de narración) en la escena 2, y ejecuta
 out/
 ├── clips/               # los 6 clips generados (clip_01.mp4, …)
 ├── narration/           # audios de narración TTS por escena (narration_01.mp3, …)
-├── clips_norm/          # versiones normalizadas con su narración mezclada
-└── final_video.mp4      # 🎉 el vídeo final (los 6 clips con narración)
+├── subtitles/           # subtítulos por escena (clip_01.srt, …)
+├── clips_norm/          # versiones normalizadas con narración y subtítulos
+├── subtitles.srt        # subtítulos del vídeo completo (con timecodes)
+└── final_video.mp4      # 🎉 el vídeo final (clips + narración + subtítulos)
 ```
 
 ## Restricciones legales / política de contenido

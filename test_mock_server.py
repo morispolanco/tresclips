@@ -82,6 +82,13 @@ _lock = threading.Lock()
 
 def make_demo_clips() -> list[Path]:
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+    logo = CLIPS_DIR / "logo.png"
+    if not logo.exists():
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=red:s=200x100",
+             "-frames:v", "1", str(logo)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+        )
     sources = [
         "testsrc2=size=640x360:rate=24",
         "smptebars=size=640x360:rate=24",
@@ -97,7 +104,7 @@ def make_demo_clips() -> list[Path]:
                  "-f", "lavfi", "-i", f"sine=frequency={freq}:duration={CLIP_DURATION}",
                  "-t", str(CLIP_DURATION), "-c:v", "libx264", "-pix_fmt", "yuv420p",
                  "-c:a", "aac", "-shortest", str(p)],
-                capture_output=True, check=True,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
             )
         clips.append(p)
     return clips
@@ -181,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
                 subprocess.run(
                     ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=660:duration={dur}",
                      "-t", str(dur), "-c:a", "libmp3lame", "-b:a", "96k", str(tmp)],
-                    capture_output=True, check=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
                 )
                 self._send_bytes(tmp.read_bytes(), "audio/mpeg")
         else:
@@ -263,20 +270,52 @@ def run_pipeline() -> int:
            "--timeout", "120",
            "--out-dir", str(ROOT / "out_mock")]
     print("▶ Ejecutando main.py contra el mock…")
-    r = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    r = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     print(r.stdout)
     if r.stderr.strip():
         print("STDERR:", r.stderr[-1500:])
-    server.shutdown()
 
     final = ROOT / "out_mock" / "final_video.mp4"
+    srt = ROOT / "out_mock" / "subtitles.srt"
     if r.returncode != 0:
         print("❌ main.py terminó con error:", r.returncode)
         return 1
     if not final.exists():
         print("❌ No se generó final_video.mp4")
         return 1
+    if not srt.exists():
+        print("❌ No se generó subtitles.srt")
+        return 1
     print(f"✔ final_video.mp4 generado ({final.stat().st_size / 1e6:.1f} MB)")
+    print(f"✔ subtitles.srt generado")
+
+    # Variante: guion JSON del usuario (se usa directamente, sin storyboard LLM)
+    script_file = ROOT / "out_mock" / "script.json"
+    script_file.write_text(json.dumps({
+        "scenes": [
+            {"prompt": "A cat astronaut floats into a space station.",
+             "narration": "Comienza la aventura.", "duration": 4},
+            {"prompt": "The cat astronaut repairs a broken panel.",
+             "narration": "Todo se complica.", "duration": 4},
+            {"prompt": "The cat astronaut celebrates.",
+             "narration": "La misión es un éxito.", "duration": 4},
+        ]
+    }, ensure_ascii=False), encoding="utf-8")
+    cmd2 = [sys.executable, str(ROOT / "main.py"),
+            "--script", str(script_file),
+            "--clips", "3", "--duration", "4",
+            "--logo", str(CLIPS_DIR / "logo.png"),
+            "--poll-interval", "1", "--timeout", "120",
+            "--out-dir", str(ROOT / "out_mock_script")]
+    r2 = subprocess.run(cmd2, env=env, capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    ok2 = (r2.returncode == 0 and (ROOT / "out_mock_script" / "final_video.mp4").exists())
+    print("guion JSON directo:", "OK" if ok2 else f"FAIL rc={r2.returncode}")
+    server.shutdown()
+    if not ok2:
+        print(r2.stdout[-800:], r2.stderr[-400:])
+        return 1
     return 0
 
 

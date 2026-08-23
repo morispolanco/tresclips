@@ -22,6 +22,10 @@ def test_parse_scenes_json():
     got2 = m.parse_scenes_json(json.dumps({"scenes": [{"prompt": f"P{i}"} for i in range(1, 7)]}))
     assert len(got2) == 6 and all(s["prompt"] and s["narration"] is None and s["duration"] is None
                                  for s in got2)
+    # también acepta una lista JSON directa (guion del usuario)
+    bare = m.parse_scenes_json(json.dumps([{"prompt": f"P{i}", "narration": f"N{i}"}
+                                           for i in range(1, 7)]))
+    assert len(bare) == 6 and bare[0]["narration"] == "N1"
     print("test_parse_scenes_json OK")
 
 
@@ -124,14 +128,54 @@ def test_make_placeholder_clip():
     print("test_make_placeholder_clip OK")
 
 
+def test_normalize_aspect():
+    assert m.normalize_aspect("h") == "16:9"
+    assert m.normalize_aspect("horizontal") == "16:9"
+    assert m.normalize_aspect("Horizontal (16:9)") == "16:9"
+    assert m.normalize_aspect("v") == "9:16"
+    assert m.normalize_aspect("vertical") == "9:16"
+    assert m.normalize_aspect("c") == "1:1"
+    assert m.normalize_aspect("cuadrado") == "1:1"
+    assert m.normalize_aspect("16:9") == "16:9"
+    assert m.normalize_aspect("21:9") == "21:9"
+    assert m.normalize_aspect("") == "16:9"
+    assert m.normalize_aspect(None) == "16:9"
+    assert m.normalize_aspect("panorámico") == "16:9"  # no reconocido -> 16:9
+    print("test_normalize_aspect OK")
+
+
+def test_srt_helpers():
+    import shutil
+    assert m.format_srt_ts(0.3) == "00:00:00,300"
+    assert m.format_srt_ts(61.5) == "00:01:01,500"
+    assert m.format_srt_ts(3661.25) == "01:01:01,250"
+    assert m.wrap_text("hola mundo", width=6) == "hola\nmundo"
+    tmp = Path(__file__).parent / "_tmp_srt"
+    try:
+        p = tmp / "clip_01.srt"
+        m.build_scene_srt("Así comienza la aventura espacial.", 5.0, p)
+        content = p.read_text(encoding="utf-8")
+        assert "00:00:00,300 --> 00:00:04,750" in content, content
+        assert "Así comienza la aventura espacial." in content
+        comb = tmp / "subtitles.srt"
+        m.build_combined_srt([("Escena uno", 0.0, 5.0), ("Escena dos", 5.0, 9.0)], comb)
+        c2 = comb.read_text(encoding="utf-8")
+        assert "00:00:05,000 --> 00:00:09,000" in c2, c2
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("test_srt_helpers OK")
+
+
 if __name__ == "__main__":
     test_parse_scenes_json()
     test_naive_storyboard()
     test_target_dims()
+    test_normalize_aspect()
     test_extract_video_url()
     test_resolve_url()
     test_resolve_duration_fallback()
     test_resolve_duration_round_up_and_clip_duration()
     test_is_restriction_error()
     test_make_placeholder_clip()
+    test_srt_helpers()
     print("TODO OK")

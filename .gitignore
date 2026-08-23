@@ -1,5 +1,6 @@
 # Entorno
 .env
+.streamlit/secrets.toml
 __pycache__/
 *.pyc
 
@@ -8,3 +9,4 @@ out/
 out_*/
 mock_clips/
 _tmp*/
+*.zip

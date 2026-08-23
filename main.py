@@ -50,8 +50,9 @@ DEFAULT_TTS_VOICE = "aura-2-alvaro-es"               # voz masculina (es-LatAm)
 DEFAULT_CLIPS = 6                                    # número de clips
 DEFAULT_DURATION = 5                                 # duración base (se ajusta a la narración)
 NARRATION_PAD = 0.75                                 # margen (s) entre narración y duración del clip
-DEFAULT_LLM_MODEL = "auto"                           # "auto" elige un LLM disponible
+DEFAULT_LLM_MODEL = "auto"   # "auto" elige el primer modelo disponible (deepseek primero)
 LLM_FALLBACKS = [
+    "deepseek/deepseek-v4-flash-0731",
     "google/gemini-2.5-flash",
     "openai/gpt-4o-mini",
     "anthropic/claude-haiku-4.5",
@@ -167,6 +168,28 @@ def extract_video_url(data: dict) -> str | None:
     return None
 
 
+VALID_ASPECTS = ("16:9", "9:16", "1:1", "4:3", "3:2", "3:4", "2:3", "21:9", "9:21")
+ASPECT_ALIASES = {
+    "h": "16:9", "horizontal": "16:9", "horizontal (16:9)": "16:9", "landscape": "16:9",
+    "v": "9:16", "vertical": "9:16", "vertical (9:16)": "9:16", "portrait": "9:16",
+    "c": "1:1", "cuadrado": "1:1", "square": "1:1",
+}
+
+
+def normalize_aspect(value: str | None) -> str:
+    """Convierte 'horizontal'/'h', 'vertical'/'v', 'cuadrado'/'c' o un ratio a
+    la relación de aspecto canónica (16:9, 9:16, 1:1, …)."""
+    if not value:
+        return "16:9"
+    v = str(value).strip().lower()
+    if v in ASPECT_ALIASES:
+        return ASPECT_ALIASES[v]
+    if v in VALID_ASPECTS:
+        return v
+    print(f"⚠ Proporción '{value}' no reconocida; se usará horizontal (16:9).")
+    return "16:9"
+
+
 def run_cmd(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     print("     >", " ".join(str(c) for c in cmd))
     return subprocess.run(
@@ -271,7 +294,7 @@ def parse_scenes_json(text: str, num_scenes: int = DEFAULT_CLIPS) -> list[dict] 
                 data = json.loads(m.group(0))
             except Exception:
                 data = None
-    scenes = data.get("scenes") if isinstance(data, dict) else None
+    scenes = data if isinstance(data, list) else (data.get("scenes") if isinstance(data, dict) else None)
     if not isinstance(scenes, list) or len(scenes) < num_scenes:
         return None
     out: list[dict] = []
@@ -325,6 +348,49 @@ def storyboard_via_openrouter(base_url: str, api_key: str, idea: str,
             scenes = parse_scenes_json(content, num_scenes)
             if scenes:
                 print(f"     (storyboard generado con {model})")
+                return scenes
+            print(f"     ! {model} devolvió JSON no válido; pruebo otro modelo…")
+        except Exception as e:  # noqa: BLE001
+            print(f"     ! {model} falló ({type(e).__name__}: {e}); pruebo otro modelo…")
+    return None
+
+
+SCRIPT_TO_SCENES_TEMPLATE = """\
+El usuario quiere convertir en vídeo un guion propio. Guion:
+
+{script}
+
+Convierte el guion en EXACTAMENTE {num_scenes} escenas consecutivas, cada una \
+con estos campos:
+1. "prompt": prompt de generación de vídeo detallado EN INGLÉS que describa el \
+sujeto, la acción principal, el movimiento de cámara, el estilo visual, la \
+iluminación y el ambiente. Evita texto o letras en pantalla.
+2. "narration": línea de narración EN ESPAÑOL (latinoamericano), breve (6-10 \
+palabras), que siga el hilo del guion. Sin marcas, personajes famosos ni \
+contenido protegido.
+3. "duration": duración sugerida en segundos (entero de 4 a 15) para que la \
+narración quepa holgadamente.
+
+Responde SOLO con JSON válido con esta estructura exacta:
+{{"scenes": [
+  {{"title": "...", "prompt": "...", "narration": "...", "duration": 5}},
+  ...  (exactamente {num_scenes} elementos)
+]}}
+"""
+
+
+def script_to_scenes(base_url: str, api_key: str, script: str, duration: int,
+                     llm_model: str, num_scenes: int = DEFAULT_CLIPS) -> list[dict] | None:
+    """Convierte un guion de texto libre en escenas (prompt + narración + duración)."""
+    prompt = SCRIPT_TO_SCENES_TEMPLATE.format(script=(script or "")[:4000],
+                                              num_scenes=num_scenes)
+    models = [llm_model] if llm_model != "auto" else LLM_FALLBACKS
+    for model in models:
+        try:
+            content = chat_completions(base_url, api_key, model, prompt)
+            scenes = parse_scenes_json(content, num_scenes)
+            if scenes:
+                print(f"     (guion convertido con {model})")
                 return scenes
             print(f"     ! {model} devolvió JSON no válido; pruebo otro modelo…")
         except Exception as e:  # noqa: BLE001
@@ -795,25 +861,107 @@ def lengthen_clip(ffmpeg: str, src: Path, dst: Path, target: float, probe: dict)
         raise RuntimeError(f"FFmpeg no pudo alargar {src.name}: {r.stderr[-500:]}")
 
 
+# --------------------------------------------------------------------------
+# Subtítulos (quemados en el vídeo + archivo .srt)
+# --------------------------------------------------------------------------
+def format_srt_ts(seconds: float) -> str:
+    """Formatea segundos como HH:MM:SS,mmm para SRT."""
+    ms = int(round(seconds * 1000))
+    h, rem = divmod(ms, 3_600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def wrap_text(text: str, width: int = 42) -> str:
+    """Parte el texto en líneas de <= width caracteres (para mejor render)."""
+    words = str(text).split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        if not cur:
+            cur = w
+        elif len(cur) + 1 + len(w) <= width:
+            cur += " " + w
+        else:
+            lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines)
+
+
+def build_scene_srt(text: str, duration: float, path: Path,
+                    start: float = 0.3, end_pad: float = 0.25) -> None:
+    """Escribe el .srt de una escena (subtítulo con el texto de la narración)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    end = max(start + 0.3, duration - end_pad)
+    content = (
+        "1\n"
+        f"{format_srt_ts(start)} --> {format_srt_ts(end)}\n"
+        f"{wrap_text(text)}\n"
+    )
+    path.write_text(content, encoding="utf-8")
+
+
+def build_combined_srt(entries: list[tuple[str, float, float]], path: Path) -> None:
+    """Escribe el .srt del vídeo completo (timecodes acumulados por escena)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blocks = []
+    for idx, (text, start, end) in enumerate(entries, start=1):
+        blocks.append(
+            f"{idx}\n{format_srt_ts(start)} --> {format_srt_ts(end)}\n{wrap_text(text)}"
+        )
+    path.write_text("\n\n".join(blocks) + "\n", encoding="utf-8")
+
+
+def make_demo_srt(dest: Path, text: str, duration: int) -> Path:
+    """Genera el .srt de demostración (mismo formato que el real)."""
+    build_scene_srt(text, float(duration), dest)
+    return dest
+
+
 def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
                    fps: int, has_audio: bool, narration: Path | None = None,
-                   duration: int | None = None) -> None:
+                   duration: int | None = None, subtitles: Path | None = None,
+                   logo: Path | None = None) -> None:
     """Re-codifica un clip a códec/resolución/fps/audio comunes para concatenarlo.
 
     Si se pasa `narration`, esa pista de audio sustituye al audio del clip
     (se rellena con silencio y se ajusta a `duration` segundos exactos).
+    Si se pasa `subtitles`, el texto se quema en el vídeo (filtro subtitles).
+    Si se pasa `logo`, la imagen se superpone pequeña en la esquina superior
+    izquierda (filtro overlay).
     """
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"fps={fps},format=yuv420p"
     )
+    if subtitles:
+        # copiar el .srt junto al clip y usar solo el nombre de archivo:
+        # un path absoluto tipo C:\... rompe el parser de filtros de FFmpeg
+        srt_local = dst.parent / f"{dst.stem}.srt"
+        shutil.copyfile(subtitles, srt_local)
+        vf += (f",subtitles=filename={srt_local.name}"
+               f":force_style='FontSize=24,Outline=1,MarginV=30'")
     cmd = [ffmpeg, "-y", "-i", str(src)]
     if narration:
         cmd += ["-i", str(narration)]
     elif not has_audio:
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
-    cmd += ["-map", "0:v:0"]
+    if logo:
+        cmd += ["-i", str(logo)]
+        # índice del input del logo: 0=clip, 1=narración/silencio (si existe)
+        logo_idx = 1 + (1 if (narration or not has_audio) else 0)
+    if logo:
+        logo_h = max(24, round(height * 0.08))  # logo pequeño: ~8% de la altura
+        fc = (f"[0:v]{vf}[base];"
+              f"[{logo_idx}:v]scale=-2:{logo_h}[lg];"
+              f"[base][lg]overlay=10:10[vout]")
+        cmd += ["-filter_complex", fc, "-map", "[vout]"]
+    else:
+        cmd += ["-map", "0:v:0", "-vf", vf]
     if narration:
         cmd += ["-map", "1:a:0", "-af", "apad", "-t", str(duration)]
     elif has_audio:
@@ -821,12 +969,11 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
     else:
         cmd += ["-map", "1:a:0", "-shortest"]
     cmd += [
-        "-vf", vf,
         "-c:v", "libx264", "-crf", "18", "-preset", "medium",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
         str(dst),
     ]
-    r = run_cmd(cmd)
+    r = run_cmd(cmd, cwd=dst.parent)
     if r.returncode != 0:
         raise RuntimeError(f"FFmpeg no pudo normalizar {src.name}: {r.stderr[-500:]}")
 
@@ -940,6 +1087,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument("idea", nargs="?", help="La idea del vídeo (también se puede pasar con --idea).")
     ap.add_argument("--idea", dest="idea_opt", help="La idea del vídeo.")
+    ap.add_argument("--script", default=None,
+                    help="Guion propio: ruta de archivo o texto. Puede ser JSON con "
+                         "{\"scenes\": [{\"prompt\", \"narration\", \"duration\"}, …]} "
+                         "(se usa tal cual) o un guion en texto libre (se convierte con "
+                         "el LLM). Si no se da idea ni guion, se pregunta.")
     ap.add_argument("--clips", type=int, default=DEFAULT_CLIPS, help="Número de clips/escenas.")
     ap.add_argument("--duration", type=int, default=DEFAULT_DURATION,
                     help="Duración base en segundos. Con narración activa, cada clip se "
@@ -954,8 +1106,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Modelo LLM para el storyboard ('auto' elige uno disponible).")
     ap.add_argument("--base-url", default=None,
                     help="URL base de la API de OpenRouter (por defecto, la oficial).")
-    ap.add_argument("--aspect-ratio", default="16:9", choices=["16:9", "9:16", "1:1", "21:9"],
-                    help="Relación de aspecto de los clips.")
+    ap.add_argument("--aspect-ratio", default=None, metavar="VALOR",
+                    help="Proporciones del vídeo: horizontal, vertical, cuadrado "
+                         "(o 16:9, 9:16, 1:1). Si no se indica, se pregunta al ejecutar.")
     ap.add_argument("--resolution", default="1080p",
                     help="Resolución de salida: 720p, 1080p o 'auto' (usa la del primer clip).")
     ap.add_argument("--fps", type=int, default=24, help="Fotogramas por segundo del vídeo final.")
@@ -969,6 +1122,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "activa, la narración sustituye a este audio.")
     ap.add_argument("--no-narration", action="store_true",
                     help="No generar narración (TTS): los clips van en silencio o con su audio.")
+    ap.add_argument("--no-subtitles", action="store_true",
+                    help="No quemar subtítulos en el vídeo (por defecto se queman los de la "
+                         "narración y se genera subtitles.srt).")
+    ap.add_argument("--logo", default=None, metavar="RUTA",
+                    help="Imagen de logo (png/jpg…) que se superpone pequeña en la esquina "
+                         "superior izquierda del PRIMER clip.")
     ap.add_argument("--tts-model", default=DEFAULT_TTS_MODEL,
                     help="Modelo de texto-a-voz (TTS) de OpenRouter.")
     ap.add_argument("--voice", default=DEFAULT_TTS_VOICE,
@@ -1012,6 +1171,28 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         print("⚠ No se encontró ffmpeg. Instálalo (https://ffmpeg.org) o usa --ffmpeg <ruta>.")
         return 2
 
+    # Proporciones: se preguntan si no se indicaron por línea de comandos
+    if args.aspect_ratio is None:
+        if sys.stdin.isatty():
+            try:
+                resp = input("¿Proporciones del vídeo? (h)orizontal / (v)ertical / "
+                             "(c)uadrado [h]: ").strip().lower()
+            except EOFError:
+                resp = ""
+            args.aspect_ratio = resp or "h"
+        else:
+            args.aspect_ratio = "h"
+    args.aspect_ratio = normalize_aspect(args.aspect_ratio)
+
+    # Logo opcional (solo en el primer clip)
+    logo_path: Path | None = None
+    if args.logo:
+        if Path(args.logo).exists():
+            logo_path = Path(args.logo).resolve()
+            print(f"🖼️ Logo: {logo_path} (esquina superior izquierda del primer clip)")
+        else:
+            print(f"⚠ No se encontró el logo '{args.logo}'; se continúa sin logo.")
+
     out_dir = Path(args.out_dir).resolve()
     clips_dir = out_dir / "clips"
     norm_dir = out_dir / "clips_norm"
@@ -1042,12 +1223,17 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         ]
         variable = False
         effective_duration = args.duration
-        clips_meta: list[tuple[Path, Path | None, int]] = []
+        subtitles_on = (not args.no_subtitles) and (not args.no_narration)
+        clips_meta: list[tuple[Path, Path | None, int, Path | None]] = []
         for i in range(1, args.clips + 1):
             narr = None
             if not args.no_narration:
                 narr = make_demo_narration(ffmpeg, demo_dir / f"demo_narr_{i}.mp3", args.duration)
-            clips_meta.append((clips[i - 1], narr, args.duration))
+            srt = None
+            if subtitles_on and scenes[i - 1].get("narration"):
+                srt = make_demo_srt(out_dir / "subtitles" / f"clip_{i:02d}.srt",
+                                    scenes[i - 1]["narration"], args.duration)
+            clips_meta.append((clips[i - 1], narr, args.duration, srt))
     else:
         if not api_key:
             print(
@@ -1057,27 +1243,53 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
             )
             return 2
 
+        # Idea o guion del usuario (--script acepta ruta de archivo o texto)
         idea = (args.idea_opt or args.idea or "").strip()
-        if not idea:
+        script_src: str | None = None
+        if args.script:
+            if Path(args.script).exists():
+                script_src = Path(args.script).read_text(encoding="utf-8").strip()
+                print(f"📜 Guion leído del archivo: {args.script}")
+            else:
+                script_src = args.script.strip()
+        if not idea and not script_src:
             try:
-                idea = input("💡 ¿Cuál es tu idea para el vídeo? ").strip()
+                idea = input("💡 ¿Cuál es tu idea para el vídeo? (o escribe 'guion:' "
+                             "seguido de tu guion) ").strip()
             except EOFError:
                 idea = ""
-        if not idea:
-            print("No se proporcionó ninguna idea. Usa: python main.py \"tu idea\"")
+            if idea.lower().startswith("guion:"):
+                script_src = idea.split(":", 1)[1].strip()
+                idea = ""
+        if not idea and not script_src:
+            print("No se proporcionó ninguna idea ni guion. Usa: python main.py \"tu idea\" "
+                  "o --script <guion.json|texto>")
             return 2
 
-        print(f"📝 Idea: {idea}")
-        if args.no_storyboard:
-            print("📝 Storyboard: plantillas simples (--no-storyboard).")
-            scenes = naive_storyboard(idea, args.duration, args.clips)
+        if script_src:
+            print("📜 Usando el guion del usuario…")
+            scenes = parse_scenes_json(script_src, args.clips)
+            if scenes is None and not args.no_storyboard:
+                print("📝 Convirtiendo el guion en escenas con OpenRouter…")
+                scenes = script_to_scenes(base_url, api_key, script_src, args.duration,
+                                          args.llm_model, args.clips)
+            if scenes is None:
+                print("❌ No se pudo interpretar el guion. Debe ser JSON con "
+                      "{\"scenes\": [{\"prompt\", \"narration\", \"duration\"}, …]} "
+                      "o un guion en texto libre (--no-storyboard desactiva la conversión).")
+                return 2
         else:
-            print(f"📝 Convirtiendo la idea en {args.clips} escenas con OpenRouter…")
-            scenes = storyboard_via_openrouter(base_url, api_key, idea, args.duration,
-                                               args.llm_model, args.clips)
-            if not scenes:
-                print("⚠ No se pudo usar el LLM para el storyboard; uso plantillas simples.")
+            print(f"📝 Idea: {idea}")
+            if args.no_storyboard:
+                print("📝 Storyboard: plantillas simples (--no-storyboard).")
                 scenes = naive_storyboard(idea, args.duration, args.clips)
+            else:
+                print(f"📝 Convirtiendo la idea en {args.clips} escenas con OpenRouter…")
+                scenes = storyboard_via_openrouter(base_url, api_key, idea, args.duration,
+                                                   args.llm_model, args.clips)
+                if not scenes:
+                    print("⚠ No se pudo usar el LLM para el storyboard; uso plantillas simples.")
+                    scenes = naive_storyboard(idea, args.duration, args.clips)
         for i, s in enumerate(scenes, 1):
             extra = f"  🎙 {s.get('narration')}" if s.get("narration") else ""
             dur = f"  ⏱ {s.get('duration')} s" if s.get("duration") else ""
@@ -1090,6 +1302,7 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         # Con narración activa, cada clip dura lo que tarda su narración (variable);
         # con --no-narration o --fixed-duration, todos duran --duration.
         variable = (not args.no_narration) and not args.fixed_duration
+        subtitles_on = (not args.no_subtitles) and (not args.no_narration)
         if variable:
             print(f"🎬 Generando {args.clips} clips de duración variable "
                   f"(cada uno se ajusta a su narración) con '{args.model}' vía OpenRouter…")
@@ -1130,6 +1343,12 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
             print(f"     ⏱ Duración del clip: {cdur} s"
                   + (f"  (narración {narration_dur:.1f} s)" if narration_dur else ""))
 
+            # subtítulos de la escena (texto de la narración)
+            srt_file: Path | None = None
+            if subtitles_on and scene.get("narration"):
+                srt_file = out_dir / "subtitles" / f"clip_{i:02d}.srt"
+                build_scene_srt(scene["narration"], float(cdur), srt_file)
+
             # 3) generar el vídeo con esa duración
             prompt = scene["prompt"]
             use_audio = args.audio and args.no_narration
@@ -1169,7 +1388,7 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
             if generated or not args.no_placeholder:
                 if not generated:
                     make_placeholder_clip(ffmpeg, dest, cdur, f"Escena {i}")
-                clips_meta.append((dest, narration_file, cdur))
+                clips_meta.append((dest, narration_file, cdur, srt_file))
             else:
                 print("     (--no-placeholder: este clip se omite.)")
             time.sleep(2)  # margen entre llamadas para evitar límites de velocidad
@@ -1181,28 +1400,35 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
     # guion con indicaciones temporales (timecodes acumulados; también en demo)
     print("\n📋 Guion con indicaciones temporales:")
     t0 = 0.0
-    for i, (dest, narr, cdur) in enumerate(clips_meta, 1):
+    srt_entries: list[tuple[str, float, float]] = []
+    for i, (dest, narr, cdur, srt) in enumerate(clips_meta, 1):
         t1 = t0 + cdur
         nar = scenes[i - 1].get("narration") if i - 1 < len(scenes) else None
         print(f"     Escena {i:>2}  {fmt_ts(t0)} – {fmt_ts(t1)}  ({cdur} s)"
               + (f"  🎙 {nar}" if nar else ""))
+        if subtitles_on and nar:
+            srt_entries.append((nar, t0, t1))
         t0 = t1
+    if subtitles_on and srt_entries:
+        combined = out_dir / "subtitles.srt"
+        build_combined_srt(srt_entries, combined)
+        print(f"     💬 Subtítulos del vídeo completo: {combined}")
 
     # ---- Paso 3: verificar, alargar si hace falta, normalizar y unir -------
-    processed: list[tuple[Path, Path | None, int]] = []
-    for i, (p, narr, cdur) in enumerate(clips_meta, 1):
+    processed: list[tuple[Path, Path | None, int, Path | None]] = []
+    for i, (p, narr, cdur, srt) in enumerate(clips_meta, 1):
         info = probe_video(ffprobe, p)
         dur = info.get("duration")
         dur_txt = f"{dur:.1f} s" if dur else "desconocida"
         print(f"     clip_{i:02d}.mp4 → duración {dur_txt}, {info.get('width')}x{info.get('height')}"
-              + (" + 🎙 narración" if narr else ""))
+              + (" + 🎙 narración" if narr else "") + (" + 💬 subtítulos" if srt else ""))
         if args.lengthen and not variable and dur and args.duration - dur > 0.5 \
                 and args.duration > cdur:
             target = clips_dir / f"clip_{i:02d}_lengthened.mp4"
             lengthen_clip(ffmpeg, p, target, float(args.duration), info)
-            processed.append((target, narr, args.duration))
+            processed.append((target, narr, args.duration, srt))
         else:
-            processed.append((p, narr, cdur))
+            processed.append((p, narr, cdur, srt))
 
     first_info = probe_video(ffprobe, processed[0][0])
     width, height = target_dims(args.resolution, args.aspect_ratio, first_info)
@@ -1210,11 +1436,12 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
     norm_dir.mkdir(parents=True, exist_ok=True)
     print("🔧 Normalizando clips con FFmpeg (mismo códec/resolución/fps/audio)…")
     norm_clips: list[Path] = []
-    for i, (p, narr, cdur) in enumerate(processed, 1):
+    for i, (p, narr, cdur, srt) in enumerate(processed, 1):
         n = norm_dir / f"clip_{i:02d}_norm.mp4"
         info = probe_video(ffprobe, p)
         normalize_clip(ffmpeg, p, n, width, height, args.fps, info.get("has_audio", False),
-                       narration=narr, duration=cdur if narr else None)
+                       narration=narr, duration=cdur if narr else None, subtitles=srt,
+                       logo=logo_path if i == 1 else None)
         norm_clips.append(n)
 
     print(f"🧩 Concatenando los {len(norm_clips)} clips en un único MP4…")
