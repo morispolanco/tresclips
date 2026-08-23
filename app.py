@@ -100,7 +100,9 @@ def session_run_dir() -> Path:
     if "run_dir" not in st.session_state:
         base = Path(tempfile.gettempdir()) / "tresclips"
         base.mkdir(parents=True, exist_ok=True)
-        st.session_state["run_dir"] = str(base / uuid.uuid4().hex[:10])
+        run = base / uuid.uuid4().hex[:10]
+        run.mkdir(parents=True, exist_ok=True)  # la carpeta debe existir antes de escribir
+        st.session_state["run_dir"] = str(run)
     return Path(st.session_state["run_dir"])
 
 
@@ -340,6 +342,7 @@ def main() -> None:
             "no_storyboard": bool(no_sb), "no_placeholder": bool(no_ph),
         }
         run_dir = session_run_dir()
+        run_dir.mkdir(parents=True, exist_ok=True)
         cfg["out_dir"] = str(run_dir)
         if not demo:
             if input_mode == "💡 Una idea":
