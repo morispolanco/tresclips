@@ -155,7 +155,7 @@ def build_argv(cfg: dict, demo: bool) -> list[str]:
         ("--aspect-ratio", "aspect"), ("--resolution", "resolution"),
         ("--fps", "fps"), ("--out-dir", "out_dir"), ("--llm-model", "llm_model"),
         ("--logo", "logo"), ("--music", "music"),
-        ("--music-volume", "music_volume"),
+        ("--music-volume", "music_volume"), ("--end-url", "end_url"),
     ):
         if cfg.get(key):
             argv += [flag, str(cfg[key])]
@@ -278,7 +278,7 @@ def main() -> None:
             "🎵 Música de fondo (opcional)", type=["mp3", "wav", "ogg", "m4a", "flac"],
             help="Se mezcla a bajo volumen bajo la narración en todos los clips",
         )
-        music_volume = st.slider("Volumen de la música", 0.0, 1.0, 0.2, 0.05,
+        music_volume = st.slider("Volumen de la música", 0.0, 1.0, 0.3, 0.05,
                                  help="0 = silencio, 1 = igual que la voz")
         aspect_label = st.radio(
             "Proporciones",
@@ -363,6 +363,13 @@ def main() -> None:
             help="JSON con la clave 'scenes' (cada escena: prompt, narration, duration) "
                  "o un guion en texto libre que se convierte automáticamente con el LLM.",
         )
+    end_url = st.text_input(
+        "🔗 URL que aparecerá al final del vídeo (opcional)",
+        value="",
+        placeholder="https://tusitio.com",
+        help="Se pega aquí la URL y se muestra siempre, en texto, en la parte "
+             "superior durante los últimos ~2 segundos del vídeo",
+    )
     c1, c2 = st.columns(2)
     with c1:
         generar = st.button("🎬 Generar vídeo", type="primary", use_container_width=True)
@@ -384,7 +391,7 @@ def main() -> None:
             "no_narration": bool(no_narr), "no_subtitles": bool(no_sub),
             "fixed_duration": bool(fixed), "audio": bool(audio), "lengthen": bool(lengthen),
             "no_storyboard": bool(no_sb), "no_placeholder": bool(no_ph),
-            "music_volume": float(music_volume),
+            "music_volume": float(music_volume), "end_url": end_url.strip(),
         }
         run_dir = session_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)

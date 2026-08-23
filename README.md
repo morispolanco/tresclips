@@ -74,7 +74,8 @@ streamlit run app.py
 
 Se abre en el navegador (normalmente `http://localhost:8501`) y permite:
 
-- Escribir la **idea** o pegar tu **guion** (selector "¿Qué quieres pegar?"), subir un
+- Escribir la **idea** o pegar tu **guion** (selector "¿Qué quieres pegar?"), pegar la
+  **URL final** (campo del formulario: se muestra en texto al final del vídeo), subir un
   **logo** (esquina superior izquierda del primer clip) y/o **música de fondo** (con su
   volumen), y lanzar **"🎬 Generar vídeo"** o **"🧪 Modo demo (sin API)"**.
 - Configurar desde la barra lateral: nº de clips, duración base, modelo de vídeo,
@@ -160,7 +161,8 @@ p. ej.:
 | `--no-subtitles` | No quemar subtítulos (por defecto se queman los de la narración y se genera `subtitles.srt`) | off |
 | `--logo RUTA` | Imagen de logo (png/jpg…) que se superpone pequeña en la esquina superior izquierda del **primer clip** | — |
 | `--music RUTA` | Música de fondo (mp3/wav…) mezclada a bajo volumen bajo la narración en todos los clips | — |
-| `--music-volume 0-1` | Volumen de la música de fondo | `0.2` |
+| `--music-volume 0-1` | Volumen de la música de fondo | `0.3` |
+| `--end-url TEXTO` | URL o texto que se muestra **siempre** quemado en la parte superior durante los últimos ~2 s del vídeo | — |
 | `--base-url URL` | URL base de la API de OpenRouter | `https://openrouter.ai/api/v1` |
 | `--aspect-ratio` | Proporciones: **horizontal**, **vertical**, **cuadrado** (o 16:9, 9:16, 1:1…). En la CLI se **pregunta** si no se indica | pregunta en CLI / selector en Streamlit |
 | `--resolution` | `480p`, `720p`, `1080p`, `2K`, `4K` o `auto` | `1080p` |
@@ -243,8 +245,12 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
   Además se genera **`subtitles.srt`** (una pista por escena, con timecodes
   acumulados) descargable desde la interfaz.
 - **Música de fondo**: con `--music RUTA` (o subiendo el archivo en la interfaz),
-  la música se mezcla a bajo volumen (`--music-volume`, por defecto 0.2) bajo la
-  narración en todos los clips (filtro `amix` de FFmpeg).
+  la música se mezcla bajo la narración en todos los clips (`amix` de FFmpeg con
+  `normalize=0` para no atenuarla, y mismo formato 48 kHz estéreo; volumen por
+  defecto 0.3, ajustable con `--music-volume`).
+- **URL final**: con `--end-url TEXTO`, ese texto (p. ej. tu web) se muestra
+  **siempre** quemado en la parte superior del vídeo durante los últimos ~2 s,
+  aunque estén desactivados los subtítulos.
 
 ## Pruebas sin gastar créditos
 

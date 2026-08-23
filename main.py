@@ -1072,19 +1072,38 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
                    fps: int, has_audio: bool, narration: Path | None = None,
                    duration: int | None = None, subtitles: Path | None = None,
                    logo: Path | None = None, music: Path | None = None,
-                   music_volume: float = 0.2) -> None:
+                   music_volume: float = 0.2, end_url: str | None = None) -> None:
     """Re-codifica un clip a códec/resolución/fps/audio comunes para concatenarlo.
 
     - `narration`: sustituye al audio del clip (relleno de silencio hasta duration).
     - `subtitles`: texto quemado (karaoke).
     - `logo`: imagen pequeña en la esquina superior izquierda.
     - `music`: música de fondo mezclada a `music_volume` (0-1) bajo la narración.
+    - `end_url`: texto (URL) quemado en la parte superior durante los últimos
+      ~2 segundos del clip (para mostrarlo al final del vídeo).
     """
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"fps={fps},format=yuv420p"
     )
+    if end_url and duration:
+        # texto de la URL al final del clip (siempre, aunque no haya subtítulos).
+        # Se pasa por archivo (textfile=) para evitar que los ':' de la URL rompan
+        # el parser de filtros de FFmpeg.
+        font_src = next((f for f in FONT_CANDIDATES if Path(f).exists()), None)
+        if font_src:
+            try:
+                font_local = dst.parent / "_font_url.ttf"
+                shutil.copyfile(font_src, font_local)
+                url_file = dst.parent / "_url.txt"
+                url_file.write_text(str(end_url), encoding="utf-8")
+                t0 = max(0.0, float(duration) - 2.2)
+                vf += (f",drawtext=textfile={url_file.name}:fontfile={font_local.name}:"
+                       f"fontsize=16:fontcolor=white:shadowcolor=black:shadowx=1:shadowy=1:"
+                       f"x=(w-text_w)/2:y=28:enable='between(t,{t0:.2f},{duration:.2f})'")
+            except OSError:
+                pass
     if subtitles:
         # copiar el .srt junto al clip y usar solo el nombre de archivo:
         # un path absoluto tipo C:\... rompe el parser de filtros de FFmpeg
@@ -1129,12 +1148,17 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
         if music:
             vol = max(0.0, min(1.0, float(music_volume)))
             if narration_idx is not None:
-                parts.append(f"[{narration_idx}:a]volume=1.0[narr]")
-                parts.append(f"[{music_idx}:a]volume={vol:.3f}[mus]")
-                parts.append("[narr][mus]amix=inputs=2:duration=first:"
+                # forzar el mismo formato (48 kHz estéreo) y NO normalizar (normalize=0):
+                # con normalize=1, amix divide la mezcla y la música queda casi inaudible
+                parts.append(f"[{narration_idx}:a]aformat=sample_rates=48000:"
+                             f"channel_layouts=stereo,volume=1.0[narr]")
+                parts.append(f"[{music_idx}:a]aformat=sample_rates=48000:"
+                             f"channel_layouts=stereo,volume={vol:.3f}[mus]")
+                parts.append("[narr][mus]amix=inputs=2:duration=first:normalize=0:"
                              "dropout_transition=0,apad[aout]")
             else:
-                parts.append(f"[{music_idx}:a]volume={vol:.3f},apad[aout]")
+                parts.append(f"[{music_idx}:a]aformat=sample_rates=48000:"
+                             f"channel_layouts=stereo,volume={vol:.3f},apad[aout]")
             amap = "[aout]"
         cmd += ["-filter_complex", ";".join(parts), "-map", vmap]
         if amap:
@@ -1320,8 +1344,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--music", default=None, metavar="RUTA",
                     help="Archivo de música de fondo (mp3/wav…) que se mezcla a bajo "
                          "volumen bajo la narración en todos los clips.")
-    ap.add_argument("--music-volume", type=float, default=0.2, metavar="0-1",
+    ap.add_argument("--music-volume", type=float, default=0.3, metavar="0-1",
                     help="Volumen de la música de fondo (0 = silencio, 1 = igual que la voz).")
+    ap.add_argument("--end-url", default=None, metavar="TEXTO",
+                    help="URL o texto que se muestra SIEMPRE quemado en la parte superior "
+                         "durante los últimos ~2 segundos del vídeo (al final).")
     ap.add_argument("--tts-model", default=DEFAULT_TTS_MODEL,
                     help="Modelo de texto-a-voz (TTS) de OpenRouter.")
     ap.add_argument("--voice", default=DEFAULT_TTS_VOICE,
@@ -1672,13 +1699,15 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
     norm_dir.mkdir(parents=True, exist_ok=True)
     print("🔧 Normalizando clips con FFmpeg (mismo códec/resolución/fps/audio)…")
     norm_clips: list[Path] = []
+    total_clips = len(processed)
     for i, (p, narr, cdur, srt) in enumerate(processed, 1):
         n = norm_dir / f"clip_{i:02d}_norm.mp4"
         info = probe_video(ffprobe, p)
         normalize_clip(ffmpeg, p, n, width, height, args.fps, info.get("has_audio", False),
                        narration=narr, duration=cdur if narr else None, subtitles=srt,
                        logo=logo_path if i == 1 else None,
-                       music=music_path, music_volume=args.music_volume)
+                       music=music_path, music_volume=args.music_volume,
+                       end_url=args.end_url if i == total_clips else None)
         norm_clips.append(n)
 
     print(f"🧩 Concatenando los {len(norm_clips)} clips en un único MP4…")
