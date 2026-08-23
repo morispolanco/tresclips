@@ -75,8 +75,8 @@ streamlit run app.py
 Se abre en el navegador (normalmente `http://localhost:8501`) y permite:
 
 - Escribir la **idea** o pegar tu **guion** (selector "¿Qué quieres pegar?"), subir un
-  **logo** opcional (esquina superior izquierda del primer clip) y lanzar
-  **"🎬 Generar vídeo"** o **"🧪 Modo demo (sin API)"**.
+  **logo** (esquina superior izquierda del primer clip) y/o **música de fondo** (con su
+  volumen), y lanzar **"🎬 Generar vídeo"** o **"🧪 Modo demo (sin API)"**.
 - Configurar desde la barra lateral: nº de clips, duración base, modelo de vídeo,
   modelo TTS y **voz** (por defecto `aura-2-alvaro-es`, masculina, español
   latinoamericano), **proporciones (horizontal / vertical / cuadrado)**, resolución,
@@ -159,6 +159,8 @@ p. ej.:
 | `--no-narration` | No generar narración TTS | off |
 | `--no-subtitles` | No quemar subtítulos (por defecto se queman los de la narración y se genera `subtitles.srt`) | off |
 | `--logo RUTA` | Imagen de logo (png/jpg…) que se superpone pequeña en la esquina superior izquierda del **primer clip** | — |
+| `--music RUTA` | Música de fondo (mp3/wav…) mezclada a bajo volumen bajo la narración en todos los clips | — |
+| `--music-volume 0-1` | Volumen de la música de fondo | `0.2` |
 | `--base-url URL` | URL base de la API de OpenRouter | `https://openrouter.ai/api/v1` |
 | `--aspect-ratio` | Proporciones: **horizontal**, **vertical**, **cuadrado** (o 16:9, 9:16, 1:1…). En la CLI se **pregunta** si no se indica | pregunta en CLI / selector en Streamlit |
 | `--resolution` | `480p`, `720p`, `1080p`, `2K`, `4K` o `auto` | `1080p` |
@@ -220,6 +222,9 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
   con sincronización palabra por palabra a partir de la duración real del audio.
   Además se genera **`subtitles.srt`** (una pista por escena, con timecodes
   acumulados) descargable desde la interfaz.
+- **Música de fondo**: con `--music RUTA` (o subiendo el archivo en la interfaz),
+  la música se mezcla a bajo volumen (`--music-volume`, por defecto 0.2) bajo la
+  narración en todos los clips (filtro `amix` de FFmpeg).
 
 ## Pruebas sin gastar créditos
 

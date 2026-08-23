@@ -89,6 +89,13 @@ def make_demo_clips() -> list[Path]:
              "-frames:v", "1", str(logo)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
         )
+    music = CLIPS_DIR / "music.mp3"
+    if not music.exists():
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", "sine=frequency=220:duration=6",
+             "-t", "6", "-c:a", "libmp3lame", "-b:a", "128k", str(music)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+        )
     sources = [
         "testsrc2=size=640x360:rate=24",
         "smptebars=size=640x360:rate=24",
@@ -307,6 +314,8 @@ def run_pipeline() -> int:
             "--clips", "6",   # el guion trae 3 escenas: debe ajustarse a 3
             "--duration", "4",
             "--logo", str(CLIPS_DIR / "logo.png"),
+            "--music", str(CLIPS_DIR / "music.mp3"),
+            "--music-volume", "0.25",
             "--poll-interval", "1", "--timeout", "120",
             "--out-dir", str(ROOT / "out_mock_script")]
     r2 = subprocess.run(cmd2, env=env, capture_output=True, text=True,

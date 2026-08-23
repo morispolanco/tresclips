@@ -985,14 +985,14 @@ def make_demo_srt(dest: Path, text: str, duration: int) -> Path:
 def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
                    fps: int, has_audio: bool, narration: Path | None = None,
                    duration: int | None = None, subtitles: Path | None = None,
-                   logo: Path | None = None) -> None:
+                   logo: Path | None = None, music: Path | None = None,
+                   music_volume: float = 0.2) -> None:
     """Re-codifica un clip a códec/resolución/fps/audio comunes para concatenarlo.
 
-    Si se pasa `narration`, esa pista de audio sustituye al audio del clip
-    (se rellena con silencio y se ajusta a `duration` segundos exactos).
-    Si se pasa `subtitles`, el texto se quema en el vídeo (filtro subtitles).
-    Si se pasa `logo`, la imagen se superpone pequeña en la esquina superior
-    izquierda (filtro overlay).
+    - `narration`: sustituye al audio del clip (relleno de silencio hasta duration).
+    - `subtitles`: texto quemado (karaoke).
+    - `logo`: imagen pequeña en la esquina superior izquierda.
+    - `music`: música de fondo mezclada a `music_volume` (0-1) bajo la narración.
     """
     vf = (
         f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
@@ -1007,29 +1007,70 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
         vf += (f",subtitles=filename={srt_local.name}"
                f":force_style='FontName=Arial,FontSize={SUBTITLE_FONT_SIZE},"
                f"Outline=1,MarginV={SUBTITLE_MARGIN_V}'")
+
     cmd = [ffmpeg, "-y", "-i", str(src)]
+    next_idx = 1
+    narration_idx: int | None = None
     if narration:
         cmd += ["-i", str(narration)]
+        narration_idx = next_idx
+        next_idx += 1
     elif not has_audio:
         cmd += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        next_idx += 1
+    logo_idx: int | None = None
     if logo:
         cmd += ["-i", str(logo)]
-        # índice del input del logo: 0=clip, 1=narración/silencio (si existe)
-        logo_idx = 1 + (1 if (narration or not has_audio) else 0)
-    if logo:
-        logo_h = max(24, round(height * 0.08))  # logo pequeño: ~8% de la altura
-        fc = (f"[0:v]{vf}[base];"
-              f"[{logo_idx}:v]scale=-2:{logo_h}[lg];"
-              f"[base][lg]overlay=10:10[vout]")
-        cmd += ["-filter_complex", fc, "-map", "[vout]"]
+        logo_idx = next_idx
+        next_idx += 1
+    music_idx: int | None = None
+    if music:
+        cmd += ["-i", str(music)]
+        music_idx = next_idx
+        next_idx += 1
+
+    need_fc = logo is not None or music is not None
+    if need_fc:
+        parts: list[str] = [f"[0:v]{vf}[base]"]
+        if logo:
+            logo_h = max(24, round(height * 0.08))  # logo pequeño: ~8% de la altura
+            parts.append(f"[{logo_idx}:v]scale=-2:{logo_h}[lg]")
+            parts.append("[base][lg]overlay=10:10[vout]")
+            vmap = "[vout]"
+        else:
+            vmap = "[base]"
+        amap: str | None = None
+        if music:
+            vol = max(0.0, min(1.0, float(music_volume)))
+            if narration_idx is not None:
+                parts.append(f"[{narration_idx}:a]volume=1.0[narr]")
+                parts.append(f"[{music_idx}:a]volume={vol:.3f}[mus]")
+                parts.append("[narr][mus]amix=inputs=2:duration=first:"
+                             "dropout_transition=0,apad[aout]")
+            else:
+                parts.append(f"[{music_idx}:a]volume={vol:.3f},apad[aout]")
+            amap = "[aout]"
+        cmd += ["-filter_complex", ";".join(parts), "-map", vmap]
+        if amap:
+            # el apad ya está dentro del filtro complejo; -t recorta a la duración
+            cmd += ["-map", amap, "-t", str(duration)]
+        else:
+            # sin música: audio simple (narración/silencio/audio del clip)
+            if narration:
+                cmd += ["-map", f"{narration_idx}:a:0", "-af", "apad", "-t", str(duration)]
+            elif has_audio:
+                cmd += ["-map", "0:a:0"]
+            else:
+                cmd += ["-map", "1:a:0", "-shortest"]
     else:
         cmd += ["-map", "0:v:0", "-vf", vf]
-    if narration:
-        cmd += ["-map", "1:a:0", "-af", "apad", "-t", str(duration)]
-    elif has_audio:
-        cmd += ["-map", "0:a:0"]
-    else:
-        cmd += ["-map", "1:a:0", "-shortest"]
+        if narration:
+            cmd += ["-map", "1:a:0", "-af", "apad", "-t", str(duration)]
+        elif has_audio:
+            cmd += ["-map", "0:a:0"]
+        else:
+            cmd += ["-map", "1:a:0", "-shortest"]
+
     cmd += [
         "-c:v", "libx264", "-crf", "18", "-preset", "medium",
         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
@@ -1190,6 +1231,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--logo", default=None, metavar="RUTA",
                     help="Imagen de logo (png/jpg…) que se superpone pequeña en la esquina "
                          "superior izquierda del PRIMER clip.")
+    ap.add_argument("--music", default=None, metavar="RUTA",
+                    help="Archivo de música de fondo (mp3/wav…) que se mezcla a bajo "
+                         "volumen bajo la narración en todos los clips.")
+    ap.add_argument("--music-volume", type=float, default=0.2, metavar="0-1",
+                    help="Volumen de la música de fondo (0 = silencio, 1 = igual que la voz).")
     ap.add_argument("--tts-model", default=DEFAULT_TTS_MODEL,
                     help="Modelo de texto-a-voz (TTS) de OpenRouter.")
     ap.add_argument("--voice", default=DEFAULT_TTS_VOICE,
@@ -1254,6 +1300,15 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
             print(f"🖼️ Logo: {logo_path} (esquina superior izquierda del primer clip)")
         else:
             print(f"⚠ No se encontró el logo '{args.logo}'; se continúa sin logo.")
+
+    # Música de fondo opcional (todos los clips)
+    music_path: Path | None = None
+    if args.music:
+        if Path(args.music).exists():
+            music_path = Path(args.music).resolve()
+            print(f"🎵 Música de fondo: {music_path} (volumen {args.music_volume})")
+        else:
+            print(f"⚠ No se encontró la música '{args.music}'; se continúa sin música.")
 
     out_dir = Path(args.out_dir).resolve()
     clips_dir = out_dir / "clips"
@@ -1518,7 +1573,8 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         info = probe_video(ffprobe, p)
         normalize_clip(ffmpeg, p, n, width, height, args.fps, info.get("has_audio", False),
                        narration=narr, duration=cdur if narr else None, subtitles=srt,
-                       logo=logo_path if i == 1 else None)
+                       logo=logo_path if i == 1 else None,
+                       music=music_path, music_volume=args.music_volume)
         norm_clips.append(n)
 
     print(f"🧩 Concatenando los {len(norm_clips)} clips en un único MP4…")

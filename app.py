@@ -117,7 +117,8 @@ def build_argv(cfg: dict, demo: bool) -> list[str]:
         ("--model", "model"), ("--tts-model", "tts_model"), ("--voice", "voice"),
         ("--aspect-ratio", "aspect"), ("--resolution", "resolution"),
         ("--fps", "fps"), ("--out-dir", "out_dir"), ("--llm-model", "llm_model"),
-        ("--logo", "logo"),
+        ("--logo", "logo"), ("--music", "music"),
+        ("--music-volume", "music_volume"),
     ):
         if cfg.get(key):
             argv += [flag, str(cfg[key])]
@@ -236,6 +237,12 @@ def main() -> None:
             "🖼️ Logo (opcional)", type=["png", "jpg", "jpeg", "webp"],
             help="Se superpone pequeño en la esquina superior izquierda del primer clip",
         )
+        music_file = st.file_uploader(
+            "🎵 Música de fondo (opcional)", type=["mp3", "wav", "ogg", "m4a", "flac"],
+            help="Se mezcla a bajo volumen bajo la narración en todos los clips",
+        )
+        music_volume = st.slider("Volumen de la música", 0.0, 1.0, 0.2, 0.05,
+                                 help="0 = silencio, 1 = igual que la voz")
         aspect_label = st.radio(
             "Proporciones",
             ["Horizontal (16:9)", "Vertical (9:16)", "Cuadrado (1:1)"],
@@ -340,6 +347,7 @@ def main() -> None:
             "no_narration": bool(no_narr), "no_subtitles": bool(no_sub),
             "fixed_duration": bool(fixed), "audio": bool(audio), "lengthen": bool(lengthen),
             "no_storyboard": bool(no_sb), "no_placeholder": bool(no_ph),
+            "music_volume": float(music_volume),
         }
         run_dir = session_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -357,6 +365,12 @@ def main() -> None:
                 logo_path = logo_dir / (Path(logo_file.name).name or "logo.png")
                 logo_path.write_bytes(logo_file.getbuffer())
                 cfg["logo"] = str(logo_path)
+            if music_file is not None:
+                music_dir = run_dir / "music"
+                music_dir.mkdir(parents=True, exist_ok=True)
+                music_path = music_dir / (Path(music_file.name).name or "music.mp3")
+                music_path.write_bytes(music_file.getbuffer())
+                cfg["music"] = str(music_path)
         argv = build_argv(cfg, demo)
         st.info(f"🚀 Lanzando pipeline… (esto puede tardar varios minutos). "
                 f"Archivos en: `{run_dir}`")
