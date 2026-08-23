@@ -93,6 +93,7 @@ def build_argv(cfg: dict, demo: bool) -> list[str]:
         ("--model", "model"), ("--tts-model", "tts_model"), ("--voice", "voice"),
         ("--aspect-ratio", "aspect"), ("--resolution", "resolution"),
         ("--fps", "fps"), ("--out-dir", "out_dir"), ("--llm-model", "llm_model"),
+        ("--logo", "logo"),
     ):
         if cfg.get(key):
             argv += [flag, str(cfg[key])]
@@ -193,6 +194,10 @@ def main() -> None:
         llm_model = st.text_input(
             "Modelo del guion (LLM)", value="deepseek/deepseek-v4-flash-0731",
             help="LLM de OpenRouter que escribe el storyboard/guion",
+        )
+        logo_file = st.file_uploader(
+            "🖼️ Logo (opcional)", type=["png", "jpg", "jpeg", "webp"],
+            help="Se superpone pequeño en la esquina superior izquierda del primer clip",
         )
         aspect_label = st.radio(
             "Proporciones",
@@ -308,6 +313,12 @@ def main() -> None:
                 script_path = run_dir / "guion.txt"
                 script_path.write_text(guion, encoding="utf-8")
                 cfg["script"] = str(script_path)
+            if logo_file is not None:
+                logo_dir = run_dir / "logo"
+                logo_dir.mkdir(parents=True, exist_ok=True)
+                logo_path = logo_dir / (Path(logo_file.name).name or "logo.png")
+                logo_path.write_bytes(logo_file.getbuffer())
+                cfg["logo"] = str(logo_path)
         argv = build_argv(cfg, demo)
         st.info(f"🚀 Lanzando pipeline… (esto puede tardar varios minutos). "
                 f"Archivos en: `{run_dir}`")
