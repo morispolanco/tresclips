@@ -114,7 +114,13 @@ def render_result(result: dict) -> None:
     exit_code = result["exit"]
     lines = result["lines"]
     if exit_code != 0:
-        st.error(f"❌ El pipeline terminó con error (código {exit_code}).")
+        tail = [ln for ln in lines if ln.strip()][-6:]
+        detail = "\n".join(tail) if tail else "(sin detalles en el registro)"
+        st.error(
+            f"❌ El pipeline terminó con error (código {exit_code}).\n\n"
+            f"**Últimas líneas del registro:**\n```\n{detail}\n```\n\n"
+            "Pulsa en **📜 Registro completo** para ver todo."
+        )
     else:
         st.success("✅ ¡Vídeo generado!")
     guion = result.get("guion") or []
