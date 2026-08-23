@@ -84,7 +84,9 @@ def session_run_dir() -> Path:
 
 def build_argv(cfg: dict, demo: bool) -> list[str]:
     argv: list[str] = []
-    if not demo and cfg.get("idea"):
+    if not demo and cfg.get("script"):
+        argv += ["--script", str(cfg["script"])]
+    elif not demo and cfg.get("idea"):
         argv += ["--idea", cfg["idea"]]
     argv += ["--clips", str(cfg["clips"]), "--duration", str(cfg["duration"])]
     for flag, key in (
@@ -249,11 +251,28 @@ def main() -> None:
             "automáticamente al desplegar."
         )
 
-    idea = st.text_area(
-        "💡 Tu idea",
-        height=90,
-        placeholder="Un robot explorador descubre una ciudad submarina olvidada…",
-    )
+    input_mode = st.radio(
+        "¿Qué quieres pegar?", ["💡 Una idea", "📜 Un guion"], horizontal=True)
+    if input_mode == "💡 Una idea":
+        guion = ""
+        idea = st.text_area(
+            "💡 Tu idea",
+            height=90,
+            placeholder="Un robot explorador descubre una ciudad submarina olvidada…",
+        )
+    else:
+        idea = ""
+        guion = st.text_area(
+            "📜 Tu guion",
+            height=220,
+            placeholder=(
+                'JSON de escenas:\n{"scenes": [{"prompt": "...", "narration": "...", '
+                '"duration": 5}, ...]}\n\nO un guion en texto libre (el LLM lo '
+                "convertirá en escenas)."
+            ),
+            help="JSON con la clave 'scenes' (cada escena: prompt, narration, duration) "
+                 "o un guion en texto libre que se convierte automáticamente con el LLM.",
+        )
     c1, c2 = st.columns(2)
     with c1:
         generar = st.button("🎬 Generar vídeo", type="primary", use_container_width=True)
@@ -261,11 +280,14 @@ def main() -> None:
         demo = st.button("🧪 Modo demo (sin API)", use_container_width=True)
 
     if generar or demo:
-        if not demo and not idea.strip():
+        if not demo and input_mode == "💡 Una idea" and not idea.strip():
             st.warning("Escribe una idea antes de generar.")
             return
+        if not demo and input_mode != "💡 Una idea" and not guion.strip():
+            st.warning("Pega tu guion antes de generar.")
+            return
         cfg = {
-            "idea": idea.strip(), "clips": int(clips), "duration": int(duration),
+            "clips": int(clips), "duration": int(duration),
             "model": model.strip(), "tts_model": tts_model.strip(), "voice": voice.strip(),
             "aspect": aspect, "resolution": resolution, "fps": int(fps),
             "no_narration": bool(no_narr), "no_subtitles": bool(no_sub),
@@ -274,6 +296,13 @@ def main() -> None:
         }
         run_dir = session_run_dir()
         cfg["out_dir"] = str(run_dir)
+        if not demo:
+            if input_mode == "💡 Una idea":
+                cfg["idea"] = idea.strip()
+            else:
+                script_path = run_dir / "guion.txt"
+                script_path.write_text(guion, encoding="utf-8")
+                cfg["script"] = str(script_path)
         argv = build_argv(cfg, demo)
         st.info(f"🚀 Lanzando pipeline… (esto puede tardar varios minutos). "
                 f"Archivos en: `{run_dir}`")
