@@ -327,10 +327,30 @@ def run_pipeline() -> int:
                         encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     ok2 = (r2.returncode == 0 and (ROOT / "out_mock_script" / "final_video.mp4").exists())
     print("guion JSON directo:", "OK" if ok2 else f"FAIL rc={r2.returncode}")
-    server.shutdown()
     if not ok2:
         print(r2.stdout[-800:], r2.stderr[-400:])
         return 1
+
+    # Variante: plantilla Talking Head (contenido -> N escenas del mismo presentador)
+    content_file = ROOT / "out_mock" / "conferencia.txt"
+    content_file.write_text(
+        "Introducción al proyecto: qué hacemos y por qué. Después hablamos de los "
+        "resultados obtenidos este año y de los planes para el próximo.", encoding="utf-8")
+    cmd3 = [sys.executable, str(ROOT / "main.py"),
+            "--template", "talking_head",
+            "--script", str(content_file),
+            "--yes",
+            "--poll-interval", "1", "--timeout", "120",
+            "--out-dir", str(ROOT / "out_mock_talking")]
+    r3 = subprocess.run(cmd3, env=env, capture_output=True, text=True,
+                        encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+    ok3 = (r3.returncode == 0 and (ROOT / "out_mock_talking" / "final_video.mp4").exists()
+           and "Plantilla Talking Head" in r3.stdout)
+    print("talking head:", "OK" if ok3 else f"FAIL rc={r3.returncode}")
+    if not ok3:
+        print(r3.stdout[-1000:], r3.stderr[-500:])
+        return 1
+    server.shutdown()
     return 0
 
 

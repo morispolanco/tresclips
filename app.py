@@ -156,6 +156,7 @@ def build_argv(cfg: dict, demo: bool) -> list[str]:
         ("--fps", "fps"), ("--out-dir", "out_dir"), ("--llm-model", "llm_model"),
         ("--logo", "logo"), ("--music", "music"),
         ("--music-volume", "music_volume"), ("--end-url", "end_url"),
+        ("--template", "template"),
     ):
         if cfg.get(key):
             argv += [flag, str(cfg[key])]
@@ -342,7 +343,10 @@ def main() -> None:
         )
 
     input_mode = st.radio(
-        "¿Qué quieres pegar?", ["💡 Una idea", "📜 Un guion"], horizontal=True)
+        "¿Qué quieres pegar?",
+        ["💡 Una idea", "📜 Un guion", "🗣️ The Talking Head"],
+        horizontal=True,
+    )
     if input_mode == "💡 Una idea":
         guion = ""
         idea = st.text_area(
@@ -350,7 +354,7 @@ def main() -> None:
             height=90,
             placeholder="Un robot explorador descubre una ciudad submarina olvidada…",
         )
-    else:
+    elif input_mode == "📜 Un guion":
         idea = ""
         guion = st.text_area(
             "📜 Tu guion",
@@ -362,6 +366,17 @@ def main() -> None:
             ),
             help="JSON con la clave 'scenes' (cada escena: prompt, narration, duration) "
                  "o un guion en texto libre que se convierte automáticamente con el LLM.",
+        )
+    else:
+        idea = ""
+        guion = st.text_area(
+            "🗣️ Contenido de la conferencia",
+            height=220,
+            placeholder="Escribe aquí TODO lo que debe decir el presentador en la conferencia…",
+            help="Plantilla Talking Head: un presentador varón latinoamericano de 30-35 años, "
+                 "con el mismo atuendo y en el mismo set en todas las escenas, hablando a "
+                 "cámara. El contenido se divide en tantos clips de 15 s como haga falta. "
+                 "Se usará el modelo bytedance/seedance-2.0 (mejor sincronización de labios).",
         )
     end_url = st.text_input(
         "🔗 URL que aparecerá al final del vídeo (opcional)",
@@ -381,7 +396,7 @@ def main() -> None:
             st.warning("Escribe una idea antes de generar.")
             return
         if not demo and input_mode != "💡 Una idea" and not guion.strip():
-            st.warning("Pega tu guion antes de generar.")
+            st.warning("Pega el guion o el contenido de la conferencia antes de generar.")
             return
         cfg = {
             "clips": int(clips), "duration": int(duration),
@@ -392,7 +407,12 @@ def main() -> None:
             "fixed_duration": bool(fixed), "audio": bool(audio), "lengthen": bool(lengthen),
             "no_storyboard": bool(no_sb), "no_placeholder": bool(no_ph),
             "music_volume": float(music_volume), "end_url": end_url.strip(),
+            "template": "talking_head" if input_mode == "🗣️ The Talking Head" else "auto",
         }
+        if cfg["template"] == "talking_head":
+            # plantilla Talking Head: modelo más sofisticado salvo que el usuario lo cambie
+            if cfg["model"] in ("", m.DEFAULT_VIDEO_MODEL):
+                cfg["model"] = m.TALKING_HEAD_MODEL
         run_dir = session_run_dir()
         run_dir.mkdir(parents=True, exist_ok=True)
         cfg["out_dir"] = str(run_dir)
@@ -400,7 +420,7 @@ def main() -> None:
             if input_mode == "💡 Una idea":
                 cfg["idea"] = idea.strip()
             else:
-                script_path = run_dir / "guion.txt"
+                script_path = run_dir / "contenido.txt"
                 script_path.write_text(guion, encoding="utf-8")
                 cfg["script"] = str(script_path)
             if logo_file is not None:

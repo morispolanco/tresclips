@@ -51,6 +51,11 @@ DEFAULT_CLIPS = 6                                    # número de clips
 DEFAULT_DURATION = 5                                 # duración base (se ajusta a la narración)
 NARRATION_PAD = 0.75                                 # margen (s) entre narración y duración del clip
 DEFAULT_LLM_MODEL = "auto"   # "auto" elige el primer modelo disponible (deepseek primero)
+# Plantilla "The Talking Head": presentador varón latinoamericano de 30-35 años,
+# mismo atuendo y set en todas las escenas, hablando a cámara.
+TALKING_HEAD_MODEL = "bytedance/seedance-2.0"   # más sofisticado: 15 s y consistencia de personaje
+TALKING_HEAD_DURATION = 15                      # duración máxima por clip
+TALKING_HEAD_MAX_WORDS = 30                     # palabras máximas de narración por escena
 LLM_FALLBACKS = [
     "deepseek/deepseek-v4-flash-0731",
     "google/gemini-2.5-flash",
@@ -425,6 +430,56 @@ def script_to_scenes(base_url: str, api_key: str, script: str, duration: int,
     return None
 
 
+TALKING_HEAD_TEMPLATE = """\
+El usuario va a grabar una CONFERENCIA (talking head) y este es el contenido que \
+quiere cubrir:
+
+{content}
+
+Convierte el contenido en un guion de vídeo de un PRESENTADOR hablando a cámara:
+
+- Divide el contenido en TANTAS escenas COMO SEA NECESARIO para cubrirlo completo \
+(no uses un número fijo: usa las que haga falta).
+- Cada escena dura 15 segundos como máximo y su "narration" (en español, \
+latinoamericano) debe durar ~13 segundos hablados (máximo {max_words} palabras), \
+siguiendo el hilo del contenido.
+- En TODAS las escenas el presentador es SIEMPRE el mismo: varón latinoamericano \
+de 30-35 años, con el MISMO atuendo (chaqueta azul marino y camisa blanca) y en \
+el MISMO set (estudio de conferencia con fondo neutro, atril y la misma \
+iluminación). La apariencia, el atuendo y el set NO cambian en ninguna escena.
+- Cada "prompt" (en inglés) describe la escena dejando claro que es el MISMO \
+presentador con el MISMO atuendo y el MISMO set, hablando directamente a cámara \
+con los labios moviéndose en sincronía con las palabras que dice, encuadre fijo \
+de medio cuerpo, plano del pecho hacia arriba, iluminación de estudio.
+
+Responde SOLO con JSON válido con esta estructura exacta:
+{{"scenes": [
+  {{"title": "...", "prompt": "...", "narration": "...", "duration": 15}},
+  ...  (todas las escenas necesarias)
+]}}
+"""
+
+
+def talking_head_scenes(base_url: str, api_key: str, content: str,
+                        llm_model: str) -> list[dict] | None:
+    """Genera el guion Talking Head: N escenas del mismo presentador cubriendo
+    el contenido, con tantas escenas como hagan falta (duración 15 s cada una)."""
+    prompt = TALKING_HEAD_TEMPLATE.format(content=(content or "")[:6000],
+                                          max_words=TALKING_HEAD_MAX_WORDS)
+    models = [llm_model] if llm_model != "auto" else LLM_FALLBACKS
+    for model in models:
+        try:
+            content_out = chat_completions(base_url, api_key, model, prompt)
+            scenes = parse_script_scenes(content_out)  # acepta cualquier nº de escenas
+            if scenes:
+                print(f"     (guion Talking Head generado con {model})")
+                return scenes
+            print(f"     ! {model} devolvió JSON no válido; pruebo otro modelo…")
+        except Exception as e:  # noqa: BLE001
+            print(f"     ! {model} falló ({type(e).__name__}: {e}); pruebo otro modelo…")
+    return None
+
+
 def naive_storyboard(idea: str, duration: int,
                      num_scenes: int = DEFAULT_CLIPS) -> list[dict]:
     """Plan B sin API: plantillas sencillas con narración genérica."""
@@ -551,7 +606,7 @@ def adjust_params(base_url: str, api_key: str, model: str,
 
 def submit_video(base_url: str, api_key: str, model: str, prompt: str,
                  duration: int, aspect: str, resolution: str,
-                 generate_audio: bool) -> dict:
+                 generate_audio: bool, audio_ref_url: str | None = None) -> dict:
     """Crea el trabajo de vídeo (POST /videos); devuelve {id, polling_url, status}."""
     body: dict = {
         "model": model,
@@ -563,6 +618,11 @@ def submit_video(base_url: str, api_key: str, model: str, prompt: str,
         body["resolution"] = resolution
     if generate_audio:
         body["generate_audio"] = True
+    if audio_ref_url:
+        # referencia de audio (lip-sync): solo la aceptan algunos modelos
+        # (p. ej. Seedance 2.x); requiere una URL pública del audio.
+        body["input_references"] = [{"type": "audio_url",
+                                     "audio_url": {"url": audio_ref_url}}]
     # Si la API rechaza algún parámetro opcional (400), se reintenta sin él.
     variants = [
         body,
@@ -608,10 +668,11 @@ def poll_video(base_url: str, api_key: str, job: dict,
 
 def generate_clip(base_url: str, api_key: str, model: str, prompt: str,
                   duration: int, aspect: str, resolution: str,
-                  generate_audio: bool, timeout: int, poll_interval: int) -> str:
+                  generate_audio: bool, timeout: int, poll_interval: int,
+                  audio_ref_url: str | None = None) -> str:
     """Genera un clip y devuelve la URL del MP4 generado."""
     job = submit_video(base_url, api_key, model, prompt, duration, aspect,
-                       resolution, generate_audio)
+                       resolution, generate_audio, audio_ref_url)
     data = poll_video(base_url, api_key, job, timeout, poll_interval)
     url: str | None = None
     urls = data.get("unsigned_urls")
@@ -1341,6 +1402,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--end-url", default=None, metavar="TEXTO",
                     help="URL o texto que se muestra SIEMPRE quemado en la parte superior "
                          "durante los últimos ~2 segundos del vídeo (al final).")
+    ap.add_argument("--template", choices=["auto", "talking_head"], default="auto",
+                    help="Plantilla 'talking_head': presentador varón latinoamericano de "
+                         "30-35 años, mismo atuendo y set en todas las escenas, hablando a "
+                         "cámara (clips de 15 s, tantos como haga falta; usa el contenido "
+                         "de la idea o --script).")
+    ap.add_argument("--audio-ref-url", default=None, metavar="URL",
+                    help="URL pública del audio de la narración para mejorar la "
+                         "sincronización de labios (input_references; solo algunos modelos "
+                         "la aceptan, p. ej. Seedance 2.x). Opcional.")
     ap.add_argument("--tts-model", default=DEFAULT_TTS_MODEL,
                     help="Modelo de texto-a-voz (TTS) de OpenRouter.")
     ap.add_argument("--voice", default=DEFAULT_TTS_VOICE,
@@ -1490,7 +1560,26 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
                   "o --script <guion.json|texto>")
             return 2
 
-        if script_src:
+        if args.template == "talking_head":
+            content = script_src or idea
+            if not content:
+                print("❌ La plantilla Talking Head necesita el contenido de la "
+                      "conferencia (pásalo como idea o con --script).")
+                return 2
+            print("🗣️ Plantilla Talking Head: generando escenas del presentador…")
+            scenes = talking_head_scenes(base_url, api_key, content, args.llm_model)
+            if not scenes:
+                print("❌ No se pudo generar el guion Talking Head (revisa clave/saldo).")
+                return 2
+            print(f"     ℹ El contenido se dividió en {len(scenes)} escenas de "
+                  f"{TALKING_HEAD_DURATION} s.")
+            args.clips = len(scenes)
+            args.duration = TALKING_HEAD_DURATION
+            if args.model == DEFAULT_VIDEO_MODEL:
+                args.model = TALKING_HEAD_MODEL
+                print(f"     ℹ Modelo de vídeo para Talking Head: {args.model} "
+                      f"(mejor consistencia del personaje y 15 s por clip).")
+        elif script_src:
             print("📜 Usando el guion del usuario…")
             # 1) ¿JSON de escenas? (se aceptan tantas escenas como traiga el guion)
             scenes = parse_script_scenes(script_src)
@@ -1557,6 +1646,8 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         # Con narración activa, cada clip dura lo que tarda su narración (variable);
         # con --no-narration o --fixed-duration, todos duran --duration.
         variable = (not args.no_narration) and not args.fixed_duration
+        if args.template == "talking_head":
+            variable = False  # Talking Head: duración fija de 15 s por clip
         subtitles_on = (not args.no_subtitles) and (not args.no_narration)
         if variable:
             print(f"🎬 Generando {args.clips} clips de duración variable "
@@ -1615,7 +1706,8 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
                 try:
                     url = generate_clip(base_url, api_key, args.model, prompt,
                                         cdur, aspect, resolution,
-                                        use_audio, args.timeout, args.poll_interval)
+                                        use_audio, args.timeout, args.poll_interval,
+                                        audio_ref_url=args.audio_ref_url)
                     download_file(url, dest, api_key, base_url)
                     generated = True
                     break

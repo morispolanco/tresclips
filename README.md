@@ -163,6 +163,8 @@ p. ej.:
 | `--music RUTA` | Música de fondo (mp3/wav…) mezclada a bajo volumen bajo la narración en todos los clips | — |
 | `--music-volume 0-1` | Volumen de la música de fondo | `0.3` |
 | `--end-url TEXTO` | URL o texto que se muestra **siempre** quemado en la parte superior durante los últimos ~2 s del vídeo | — |
+| `--template {auto,talking_head}` | **Plantilla Talking Head**: presentador varón latinoamericano de 30-35 años, mismo atuendo y set en todas las escenas, hablando a cámara | `auto` |
+| `--audio-ref-url URL` | URL pública del audio de narración para mejorar la **sincronización de labios** (`input_references`; solo algunos modelos la aceptan) | — |
 | `--base-url URL` | URL base de la API de OpenRouter | `https://openrouter.ai/api/v1` |
 | `--aspect-ratio` | Proporciones: **horizontal**, **vertical**, **cuadrado** (o 16:9, 9:16, 1:1…). En la CLI se **pregunta** si no se indica | pregunta en CLI / selector en Streamlit |
 | `--resolution` | `480p`, `720p`, `1080p`, `2K`, `4K` o `auto` | `1080p` |
@@ -251,6 +253,14 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
 - **URL final**: con `--end-url TEXTO`, ese texto (p. ej. tu web) se muestra
   **siempre** quemado en la parte superior (con fondo para contraste) durante los
   últimos ~3 s del vídeo, aunque estén desactivados los subtítulos.
+- **Plantilla Talking Head** (`--template talking_head`): el contenido (la
+  conferencia) se divide en **tantas escenas de 15 s como haga falta**, siempre con
+  el **mismo presentador** (varón latinoamericano de 30-35 años, mismo atuendo y
+  set) hablando a cámara. Usa `bytedance/seedance-2.0` (mejor consistencia del
+  personaje y 15 s). Para **lip-sync** exacto, la API acepta una referencia de
+  audio (`--audio-ref-url` con una URL pública del audio de la narración, solo en
+  modelos Seedance 2.x); sin ella, el presentador habla con movimiento natural de
+  labios aproximado y la voz TTS se mezcla encima.
 
 ## Pruebas sin gastar créditos
 
