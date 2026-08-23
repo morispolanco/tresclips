@@ -95,9 +95,10 @@ def build_argv(cfg: dict, demo: bool) -> list[str]:
         if cfg.get(key):
             argv += [flag, str(cfg[key])]
     for flag, key in (
-        ("--no-narration", "no_narration"), ("--fixed-duration", "fixed_duration"),
-        ("--audio", "audio"), ("--lengthen", "lengthen"),
-        ("--no-storyboard", "no_storyboard"), ("--no-placeholder", "no_placeholder"),
+        ("--no-narration", "no_narration"), ("--no-subtitles", "no_subtitles"),
+        ("--fixed-duration", "fixed_duration"), ("--audio", "audio"),
+        ("--lengthen", "lengthen"), ("--no-storyboard", "no_storyboard"),
+        ("--no-placeholder", "no_placeholder"),
     ):
         if cfg.get(key):
             argv.append(flag)
@@ -142,6 +143,18 @@ def render_result(result: dict) -> None:
                 )
         except OSError as e:
             st.warning(f"No se pudo preparar la descarga: {e}")
+        srt = Path(video).parent / "subtitles.srt"
+        if srt.exists():
+            try:
+                with open(srt, "rb") as f:
+                    st.download_button(
+                        "💬 Descargar subtítulos (.srt)",
+                        data=f.read(),
+                        file_name="subtitles.srt",
+                        mime="application/x-subrip",
+                    )
+            except OSError:
+                pass
     with st.expander("📜 Registro completo", expanded=exit_code != 0):
         st.code("\n".join(lines[-200:]), language=None)
 
@@ -193,9 +206,10 @@ def main() -> None:
         col1, col2 = st.columns(2)
         with col1:
             no_narr = st.checkbox("Sin narración", value=False)
+            no_sub = st.checkbox("Sin subtítulos", value=False)
             fixed = st.checkbox("Duración fija", value=False)
-            audio = st.checkbox("Audio del modelo", value=False)
         with col2:
+            audio = st.checkbox("Audio del modelo", value=False)
             lengthen = st.checkbox("Alargar a --duration", value=False)
             no_sb = st.checkbox("Sin storyboard LLM", value=False)
             no_ph = st.checkbox("Omitir clips bloqueados", value=False)
@@ -221,7 +235,9 @@ def main() -> None:
                 "2. **Vídeo**: la API de vídeo genera cada clip con la duración que "
                 "necesita (se ajusta a la narración).\n"
                 "3. **Narración**: TTS en español latinoamericano (voz masculina).\n"
-                "4. **FFmpeg** mezcla y concatena todo en un MP4.\n\n"
+                "4. **Subtítulos**: el texto de la narración se quema en el vídeo y "
+                "se genera `subtitles.srt` para el vídeo completo.\n"
+                "5. **FFmpeg** mezcla y concatena todo en un MP4.\n\n"
                 "💡 Prueba primero con **Modo demo** (no gasta créditos)."
             )
 
@@ -252,8 +268,8 @@ def main() -> None:
             "idea": idea.strip(), "clips": int(clips), "duration": int(duration),
             "model": model.strip(), "tts_model": tts_model.strip(), "voice": voice.strip(),
             "aspect": aspect, "resolution": resolution, "fps": int(fps),
-            "no_narration": bool(no_narr), "fixed_duration": bool(fixed),
-            "audio": bool(audio), "lengthen": bool(lengthen),
+            "no_narration": bool(no_narr), "no_subtitles": bool(no_sub),
+            "fixed_duration": bool(fixed), "audio": bool(audio), "lengthen": bool(lengthen),
             "no_storyboard": bool(no_sb), "no_placeholder": bool(no_ph),
         }
         run_dir = session_run_dir()
