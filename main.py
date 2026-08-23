@@ -280,8 +280,8 @@ Responde SOLO con JSON válido con esta estructura exacta:
 """
 
 
-def parse_scenes_json(text: str, num_scenes: int = DEFAULT_CLIPS) -> list[dict] | None:
-    """Extrae las escenas (prompt + narración) de la respuesta JSON del LLM."""
+def extract_scenes_list(text: str) -> list | None:
+    """Extrae la lista de escenas crudas de un texto JSON (dict con 'scenes' o lista)."""
     text = (text or "").strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.S)
     data = None
@@ -295,21 +295,48 @@ def parse_scenes_json(text: str, num_scenes: int = DEFAULT_CLIPS) -> list[dict] 
             except Exception:
                 data = None
     scenes = data if isinstance(data, list) else (data.get("scenes") if isinstance(data, dict) else None)
-    if not isinstance(scenes, list) or len(scenes) < num_scenes:
+    return scenes if isinstance(scenes, list) else None
+
+
+def _normalize_scene(s: object) -> dict | None:
+    """Convierte un elemento de escena en {prompt, narration, duration} (o None)."""
+    if not isinstance(s, dict) or not str(s.get("prompt", "")).strip():
+        return None
+    try:
+        dur = int(s.get("duration"))
+    except (TypeError, ValueError):
+        dur = None
+    return {
+        "prompt": str(s["prompt"]).strip(),
+        "narration": str(s.get("narration", "")).strip() or None,
+        "duration": dur,
+    }
+
+
+def parse_scenes_json(text: str, num_scenes: int = DEFAULT_CLIPS) -> list[dict] | None:
+    """Extrae las escenas (prompt + narración + duración) de la respuesta JSON del LLM."""
+    scenes = extract_scenes_list(text)
+    if not scenes or len(scenes) < num_scenes:
         return None
     out: list[dict] = []
     for s in scenes[:num_scenes]:
-        if isinstance(s, dict) and str(s.get("prompt", "")).strip():
-            try:
-                dur = int(s.get("duration"))
-            except (TypeError, ValueError):
-                dur = None
-            out.append({
-                "prompt": str(s["prompt"]).strip(),
-                "narration": str(s.get("narration", "")).strip() or None,
-                "duration": dur,
-            })
+        norm = _normalize_scene(s)
+        if norm:
+            out.append(norm)
     return out if len(out) == num_scenes else None
+
+
+def parse_script_scenes(text: str) -> list[dict] | None:
+    """Parsea un guion JSON del usuario sin exigir un número mínimo de escenas."""
+    scenes = extract_scenes_list(text)
+    if not scenes:
+        return None
+    out: list[dict] = []
+    for s in scenes:
+        norm = _normalize_scene(s)
+        if norm:
+            out.append(norm)
+    return out or None
 
 
 def chat_completions(base_url: str, api_key: str, model: str, prompt: str,
@@ -1268,15 +1295,30 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
 
         if script_src:
             print("📜 Usando el guion del usuario…")
-            scenes = parse_scenes_json(script_src, args.clips)
-            if scenes is None and not args.no_storyboard:
+            # 1) ¿JSON de escenas? (se aceptan tantas escenas como traiga el guion)
+            scenes = parse_script_scenes(script_src)
+            if scenes:
+                if len(scenes) != args.clips:
+                    print(f"     ℹ El guion trae {len(scenes)} escenas; se usarán "
+                          f"{len(scenes)} clips (--clips {args.clips} ignorado).")
+                args.clips = len(scenes)
+            else:
+                # 2) guion en texto libre: convertirlo con el LLM
+                if args.no_storyboard:
+                    print("     ℹ --no-storyboard activo: no se puede convertir un guion "
+                          "de texto libre. Pega el guion como JSON de escenas.")
+                    print("❌ No se pudo interpretar el guion.")
+                    return 2
                 print("📝 Convirtiendo el guion en escenas con OpenRouter…")
                 scenes = script_to_scenes(base_url, api_key, script_src, args.duration,
                                           args.llm_model, args.clips)
             if scenes is None:
-                print("❌ No se pudo interpretar el guion. Debe ser JSON con "
-                      "{\"scenes\": [{\"prompt\", \"narration\", \"duration\"}, …]} "
-                      "o un guion en texto libre (--no-storyboard desactiva la conversión).")
+                print("❌ No se pudo interpretar el guion. Posibles causas:")
+                print("   - No es JSON válido con 'scenes' (o una lista de escenas).")
+                print("   - Es texto libre y la conversión con el LLM falló (revisa la "
+                      "clave/el saldo en https://openrouter.ai/settings/credits).")
+                print("   - Formato esperado: {\"scenes\": [{\"prompt\": \"…\", "
+                      "\"narration\": \"…\", \"duration\": 5}, …]}")
                 return 2
         else:
             print(f"📝 Idea: {idea}")

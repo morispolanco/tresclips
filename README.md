@@ -49,6 +49,8 @@ python main.py "Un robot explorador descubre una ciudad submarina olvidada"
 python main.py --script mi_guion.json
 python main.py --script "Escena 1: un robot despierta... Escena 2: explora..."
 
+# Si el guion JSON trae N escenas, se usan N clips automáticamente (--clips se ignora)
+
 # Sin narración (clips fijos de --duration segundos, en silencio o con su audio)
 python main.py "Un robot explorador descubre una ciudad submarina olvidada" --no-narration
 

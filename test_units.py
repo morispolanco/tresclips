@@ -166,6 +166,24 @@ def test_srt_helpers():
     print("test_srt_helpers OK")
 
 
+def test_parse_script_scenes():
+    # guion JSON con menos escenas que el mínimo por defecto: se acepta igual
+    raw = json.dumps({"scenes": [{"prompt": f"P{i}", "narration": f"N{i}", "duration": 4}
+                                  for i in range(1, 4)]})
+    got = m.parse_script_scenes(raw)
+    assert len(got) == 3 and got[0]["duration"] == 4
+    # lista directa
+    assert len(m.parse_script_scenes(json.dumps([{"prompt": "x"}, {"prompt": "y"}]))) == 2
+    # sin duration -> None; narración opcional
+    s = m.parse_script_scenes(json.dumps([{"prompt": "x"}]))[0]
+    assert s["duration"] is None and s["narration"] is None
+    # texto no JSON -> None
+    assert m.parse_script_scenes("Escena 1: un robot despierta") is None
+    # parse_scenes_json (para el LLM) sí exige el mínimo
+    assert m.parse_scenes_json(raw) is None
+    print("test_parse_script_scenes OK")
+
+
 if __name__ == "__main__":
     test_parse_scenes_json()
     test_naive_storyboard()
@@ -178,4 +196,5 @@ if __name__ == "__main__":
     test_is_restriction_error()
     test_make_placeholder_clip()
     test_srt_helpers()
+    test_parse_script_scenes()
     print("TODO OK")

@@ -304,7 +304,8 @@ def run_pipeline() -> int:
     }, ensure_ascii=False), encoding="utf-8")
     cmd2 = [sys.executable, str(ROOT / "main.py"),
             "--script", str(script_file),
-            "--clips", "3", "--duration", "4",
+            "--clips", "6",   # el guion trae 3 escenas: debe ajustarse a 3
+            "--duration", "4",
             "--logo", str(CLIPS_DIR / "logo.png"),
             "--poll-interval", "1", "--timeout", "120",
             "--out-dir", str(ROOT / "out_mock_script")]
