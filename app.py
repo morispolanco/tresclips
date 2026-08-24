@@ -382,8 +382,8 @@ def main() -> None:
         "🔗 URL que aparecerá al final del vídeo (opcional)",
         value="",
         placeholder="https://tusitio.com",
-        help="Se pega aquí la URL y se muestra siempre, en texto, en la parte "
-             "superior durante los últimos ~2 segundos del vídeo",
+        help="Se convierte en una diapositiva final (imagen con la URL) que se añade "
+             "al final del vídeo durante 3 segundos",
     )
     c1, c2 = st.columns(2)
     with c1:

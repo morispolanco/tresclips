@@ -320,6 +320,7 @@ def run_pipeline() -> int:
             "--logo", str(CLIPS_DIR / "logo.png"),
             "--music", str(CLIPS_DIR / "music.mp3"),
             "--music-volume", "0.25",
+            "--end-url", "https://misitio.com",
             "--yes",
             "--poll-interval", "1", "--timeout", "120",
             "--out-dir", str(ROOT / "out_mock_script")]

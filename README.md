@@ -159,10 +159,10 @@ p. ej.:
 | `--voice VOZ` | Voz TTS (masculina, español latinoamericano) | `aura-2-alvaro-es` |
 | `--no-narration` | No generar narración TTS | off |
 | `--no-subtitles` | No quemar subtítulos (por defecto se queman los de la narración y se genera `subtitles.srt`) | off |
-| `--logo RUTA` | Imagen de logo (png/jpg…) que se superpone pequeña en la esquina superior izquierda del **primer clip** | — |
+| `--logo RUTA` | Imagen de logo (png/jpg…) que se superpone pequeña en la esquina superior izquierda de **todos los clips** | — |
 | `--music RUTA` | Música de fondo (mp3/wav…) mezclada a bajo volumen bajo la narración en todos los clips | — |
 | `--music-volume 0-1` | Volumen de la música de fondo | `0.3` |
-| `--end-url TEXTO` | URL o texto que se muestra **siempre** quemado en la parte superior durante los últimos ~2 s del vídeo | — |
+| `--end-url TEXTO` | URL o texto que se convierte en una **diapositiva final** (imagen con la URL) al final del vídeo durante **3 s** | — |
 | `--template {auto,talking_head}` | **Plantilla Talking Head**: presentador varón latinoamericano de 30-35 años, mismo atuendo y set en todas las escenas, hablando a cámara | `auto` |
 | `--audio-ref-url URL` | URL pública del audio de narración para mejorar la **sincronización de labios** (`input_references`; solo algunos modelos la aceptan) | — |
 | `--base-url URL` | URL base de la API de OpenRouter | `https://openrouter.ai/api/v1` |
@@ -250,9 +250,10 @@ Para ver el catálogo completo (Sora, Kling, Seedance, Hailuo…): `python main.
   música se mezcla **sobre el vídeo completo** al final del montaje (`amix` con
   `normalize=0` y 48 kHz estéreo), de modo que suena **continua de principio a fin,
   sin cortes ni huecos entre clips**. Volumen por defecto 0.3 (`--music-volume`).
-- **URL final**: con `--end-url TEXTO`, ese texto (p. ej. tu web) se muestra
-  **siempre** quemado en la parte superior (con fondo para contraste) durante los
-  últimos ~3 s del vídeo, aunque estén desactivados los subtítulos.
+- **URL final**: con `--end-url TEXTO`, ese texto (p. ej. tu web) se convierte en una
+  **diapositiva final** (imagen de fondo oscuro con la URL centrada) que se añade
+  como **último elemento del vídeo durante 3 segundos**, con la música de fondo
+  continuando si la hay.
 - **Plantilla Talking Head** (`--template talking_head`): el contenido (la
   conferencia) se divide en **tantas escenas de 15 s como haga falta**, siempre con
   el **mismo presentador** (varón latinoamericano de 30-35 años, mismo atuendo y

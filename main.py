@@ -1132,14 +1132,12 @@ def make_demo_srt(dest: Path, text: str, duration: int) -> Path:
 def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
                    fps: int, has_audio: bool, narration: Path | None = None,
                    duration: int | None = None, subtitles: Path | None = None,
-                   logo: Path | None = None, end_url: str | None = None) -> None:
+                   logo: Path | None = None) -> None:
     """Re-codifica un clip a códec/resolución/fps/audio comunes para concatenarlo.
 
     - `narration`: sustituye al audio del clip (relleno de silencio hasta duration).
     - `subtitles`: texto quemado (karaoke).
     - `logo`: imagen pequeña en la esquina superior izquierda.
-    - `end_url`: texto (URL) quemado en la parte superior durante los últimos
-      ~3 segundos del clip (para mostrarlo al final del vídeo).
     La música de fondo NO se mezcla aquí: se mezcla al final sobre el vídeo
     completo (mix_background_music) para que sea continua sin cortes.
     """
@@ -1148,24 +1146,6 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
         f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"fps={fps},format=yuv420p"
     )
-    if end_url and duration:
-        # texto de la URL al final del clip (siempre, aunque no haya subtítulos).
-        # Se pasa por archivo (textfile=) para evitar que los ':' de la URL rompan
-        # el parser de filtros de FFmpeg.
-        font_src = next((f for f in FONT_CANDIDATES if Path(f).exists()), None)
-        if font_src:
-            try:
-                font_local = dst.parent / "_font_url.ttf"
-                shutil.copyfile(font_src, font_local)
-                url_file = dst.parent / "_url.txt"
-                url_file.write_text(str(end_url), encoding="utf-8")
-                t0 = max(0.0, float(duration) - 3.0)
-                vf += (f",drawtext=textfile={url_file.name}:fontfile={font_local.name}:"
-                       f"fontsize=18:fontcolor=white:borderw=1:bordercolor=black:"
-                       f"box=1:boxcolor=black@0.45:boxborderw=8:"
-                       f"x=(w-text_w)/2:y=28:enable='between(t,{t0:.2f},{duration:.2f})'")
-            except OSError:
-                pass
     if subtitles:
         # copiar el .srt junto al clip y usar solo el nombre de archivo:
         # un path absoluto tipo C:\... rompe el parser de filtros de FFmpeg
@@ -1220,6 +1200,42 @@ def normalize_clip(ffmpeg: str, src: Path, dst: Path, width: int, height: int,
     r = run_cmd(cmd, cwd=dst.parent)
     if r.returncode != 0:
         raise RuntimeError(f"FFmpeg no pudo normalizar {src.name}: {r.stderr[-500:]}")
+
+
+def make_url_slide(ffmpeg: str, dest: Path, url: str, width: int, height: int,
+                   fps: int, duration: float = 3.0) -> Path:
+    """Crea la diapositiva final: una imagen de fondo con la URL centrada,
+    con audio en silencio, lista para concatenarse al final del vídeo."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    font_src = next((f for f in FONT_CANDIDATES if Path(f).exists()), None)
+    vf = "format=yuv420p"
+    if font_src:
+        try:
+            font_local = dest.parent / "_font_url.ttf"
+            shutil.copyfile(font_src, font_local)
+            url_file = dest.parent / "_url.txt"
+            url_file.write_text(str(url), encoding="utf-8")
+            fs = max(24, round(height * 0.05))  # tamaño proporcional a la altura
+            vf = (f"drawtext=textfile={url_file.name}:fontfile={font_local.name}:"
+                  f"fontsize={fs}:fontcolor=white:box=1:boxcolor=black@0.35:boxborderw=18:"
+                  f"x=(w-text_w)/2:y=(h-text_h)/2,") + vf
+        except OSError:
+            pass
+    cmd = [
+        ffmpeg, "-y",
+        "-f", "lavfi", "-i", f"color=c=0x1a1a2e:s={width}x{height}:r={fps}",
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", str(duration),
+        "-vf", vf,
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-shortest",
+        str(dest),
+    ]
+    r = run_cmd(cmd, cwd=dest.parent)
+    if r.returncode != 0:
+        raise RuntimeError(f"FFmpeg no pudo crear la diapositiva final: {r.stderr[-500:]}")
+    return dest
 
 
 def mix_background_music(ffmpeg: str, video: Path, music: Path, volume: float,
@@ -1400,8 +1416,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--music-volume", type=float, default=0.3, metavar="0-1",
                     help="Volumen de la música de fondo (0 = silencio, 1 = igual que la voz).")
     ap.add_argument("--end-url", default=None, metavar="TEXTO",
-                    help="URL o texto que se muestra SIEMPRE quemado en la parte superior "
-                         "durante los últimos ~2 segundos del vídeo (al final).")
+                    help="URL o texto que se muestra como DIAPOSITIVA final (imagen con "
+                         "la URL) al final del vídeo durante 3 segundos.")
     ap.add_argument("--template", choices=["auto", "talking_head"], default="auto",
                     help="Plantilla 'talking_head': presentador varón latinoamericano de "
                          "30-35 años, mismo atuendo y set en todas las escenas, hablando a "
@@ -1760,6 +1776,8 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
         combined = out_dir / "subtitles.srt"
         build_combined_srt(srt_entries, combined)
         print(f"     💬 Subtítulos del vídeo completo: {combined}")
+    if args.end_url:
+        print(f"     Final  {fmt_ts(t0)} – {fmt_ts(t0 + 3.0)}  (3 s)  🔗 {args.end_url}")
 
     # ---- Paso 3: verificar, alargar si hace falta, normalizar y unir -------
     processed: list[tuple[Path, Path | None, int, Path | None]] = []
@@ -1783,15 +1801,20 @@ def main(argv: list[str] | None = None, api_key: str | None = None) -> int:
     norm_dir.mkdir(parents=True, exist_ok=True)
     print("🔧 Normalizando clips con FFmpeg (mismo códec/resolución/fps/audio)…")
     norm_clips: list[Path] = []
-    total_clips = len(processed)
     for i, (p, narr, cdur, srt) in enumerate(processed, 1):
         n = norm_dir / f"clip_{i:02d}_norm.mp4"
         info = probe_video(ffprobe, p)
         normalize_clip(ffmpeg, p, n, width, height, args.fps, info.get("has_audio", False),
                        narration=narr, duration=cdur, subtitles=srt,
-                       logo=logo_path if i == 1 else None,
-                       end_url=args.end_url if i == total_clips else None)
+                       logo=logo_path)  # el logo aparece en TODOS los clips
         norm_clips.append(n)
+
+    # URL final: diapositiva (imagen con la URL) como ÚLTIMO elemento del vídeo, 3 s
+    if args.end_url:
+        print(f"🔗 Diapositiva final con la URL ({args.end_url})…")
+        slide = make_url_slide(ffmpeg, norm_dir / "url_slide.mp4",
+                               args.end_url, width, height, args.fps)
+        norm_clips.append(slide)
 
     print(f"🧩 Concatenando los {len(norm_clips)} clips en un único MP4…")
     concat_clips(ffmpeg, norm_clips, final_path, out_dir)
