@@ -248,12 +248,7 @@ def main() -> None:
                  "https://openrouter.ai/settings/keys (requiere saldo).",
         )
         effective_key = get_configured_key(api_key)
-        if has_secret_key():
-            st.caption(
-                "🔑 Hay una clave en los **secretos de Streamlit**; no hace falta "
-                "escribirla (si escribes una, se usa la tuya solo en esta sesión)."
-            )
-        else:
+        if not has_secret_key():
             st.caption("🔒 Tu clave se usa solo en esta sesión y nunca se guarda ni se comparte.")
         st.divider()
         clips = st.slider("Nº de clips", 1, 12, m.DEFAULT_CLIPS)
